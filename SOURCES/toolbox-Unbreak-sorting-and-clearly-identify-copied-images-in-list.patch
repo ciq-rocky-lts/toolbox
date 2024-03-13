@@ -1,0 +1,2215 @@
+From 0cc0f6f6cd188022c0127f649a03cf5249da31ea Mon Sep 17 00:00:00 2001
+From: Debarshi Ray <rishi@fedoraproject.org>
+Date: Mon, 5 Dec 2022 22:17:51 +0100
+Subject: [PATCH 01/27] cmd/list: Remove redundant initializations
+
+Fallout from 2369da5d31830e5cd3e1a13857a686365875ae61
+
+https://github.com/containers/toolbox/pull/1188
+(cherry picked from commit 71f73a4b31c79c14aababca67b0f172fc79948dd)
+---
+ src/cmd/list.go | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/src/cmd/list.go b/src/cmd/list.go
+index 948bfa68c936..158020f58287 100644
+--- a/src/cmd/list.go
++++ b/src/cmd/list.go
+@@ -141,7 +141,7 @@ func getContainers() ([]toolboxContainer, error) {
+ 
+ 	for _, container := range containers {
+ 		var c toolboxContainer
+-		var isToolboxContainer bool = false
++		var isToolboxContainer bool
+ 
+ 		containerJSON, err := json.Marshal(container)
+ 		if err != nil {
+@@ -204,7 +204,7 @@ func getImages() ([]toolboxImage, error) {
+ 
+ 	for _, image := range images {
+ 		var i toolboxImage
+-		var isToolboxImage bool = false
++		var isToolboxImage bool
+ 
+ 		imageJSON, err := json.Marshal(image)
+ 		if err != nil {
+-- 
+2.38.1
+
+
+From 7e75fc80e881c7bcdcfd7a73b7b74679cde9a922 Mon Sep 17 00:00:00 2001
+From: Debarshi Ray <rishi@fedoraproject.org>
+Date: Mon, 5 Dec 2022 23:41:00 +0100
+Subject: [PATCH 02/27] cmd/list: Simplify code
+
+Fallout from 2369da5d31830e5cd3e1a13857a686365875ae61
+
+https://github.com/containers/toolbox/pull/1189
+(cherry picked from commit 67e210378e7b43cc0847cd171209861862f225b0)
+---
+ src/cmd/list.go | 14 ++------------
+ 1 file changed, 2 insertions(+), 12 deletions(-)
+
+diff --git a/src/cmd/list.go b/src/cmd/list.go
+index 158020f58287..cb42ab1d22e3 100644
+--- a/src/cmd/list.go
++++ b/src/cmd/list.go
+@@ -141,7 +141,6 @@ func getContainers() ([]toolboxContainer, error) {
+ 
+ 	for _, container := range containers {
+ 		var c toolboxContainer
+-		var isToolboxContainer bool
+ 
+ 		containerJSON, err := json.Marshal(container)
+ 		if err != nil {
+@@ -157,14 +156,10 @@ func getContainers() ([]toolboxContainer, error) {
+ 
+ 		for label := range toolboxLabels {
+ 			if _, ok := c.Labels[label]; ok {
+-				isToolboxContainer = true
++				toolboxContainers = append(toolboxContainers, c)
+ 				break
+ 			}
+ 		}
+-
+-		if isToolboxContainer {
+-			toolboxContainers = append(toolboxContainers, c)
+-		}
+ 	}
+ 
+ 	return toolboxContainers, nil
+@@ -204,7 +199,6 @@ func getImages() ([]toolboxImage, error) {
+ 
+ 	for _, image := range images {
+ 		var i toolboxImage
+-		var isToolboxImage bool
+ 
+ 		imageJSON, err := json.Marshal(image)
+ 		if err != nil {
+@@ -220,14 +214,10 @@ func getImages() ([]toolboxImage, error) {
+ 
+ 		for label := range toolboxLabels {
+ 			if _, ok := i.Labels[label]; ok {
+-				isToolboxImage = true
++				toolboxImages = append(toolboxImages, i)
+ 				break
+ 			}
+ 		}
+-
+-		if isToolboxImage {
+-			toolboxImages = append(toolboxImages, i)
+-		}
+ 	}
+ 
+ 	return toolboxImages, nil
+-- 
+2.38.1
+
+
+From aac7c75c51d425ca9af5acd87a9ab3fa600c0481 Mon Sep 17 00:00:00 2001
+From: Debarshi Ray <rishi@fedoraproject.org>
+Date: Tue, 6 Dec 2022 00:25:23 +0100
+Subject: [PATCH 03/27] cmd/list, pkg/podman: Don't unmarshal the 'podman
+ images' JSON twice
+
+This builds on top of commit e7722078310a79b0.
+
+Currently, the JSON from 'podman images --format json' gets unmarshalled
+into a []map[string]interface{} in podman.GetImages, where the maps in
+the slice represent images.  Each map is then marshalled back into JSON
+and then again unmarshalled into a toolboxImage type.
+
+This is wasteful.  The toolboxImage type already implements the
+json.Unmarshaler interface [1], since commit e7722078310a79b0.  Hence,
+the entire JSON from 'podman images --format json' can be directly
+unmarshalled into a slice of toolboxImages without involving the
+[]map[string]interface{}.
+
+A subsequent commit will move the toolboxImage type into the podman
+package to more tightly encapsulate the unmarshalling of the JSON.  So,
+as an intermediate step in that direction, the podman.GetImages function
+has been temporarily changed to return the entire JSON.
+
+[1] https://pkg.go.dev/encoding/json#Unmarshaler
+
+https://github.com/containers/toolbox/pull/1190
+(cherry picked from commit 2486e25601331a9305ed559cb86ed807b4ea0836)
+---
+ src/cmd/list.go          | 26 +++++++++-----------------
+ src/pkg/podman/podman.go | 16 +++++-----------
+ 2 files changed, 14 insertions(+), 28 deletions(-)
+
+diff --git a/src/cmd/list.go b/src/cmd/list.go
+index cb42ab1d22e3..39fed1d5b772 100644
+--- a/src/cmd/list.go
++++ b/src/cmd/list.go
+@@ -189,32 +189,24 @@ func listHelp(cmd *cobra.Command, args []string) {
+ func getImages() ([]toolboxImage, error) {
+ 	logrus.Debug("Fetching all images")
+ 	args := []string{"--sort", "repository"}
+-	images, err := podman.GetImages(args...)
++	data, err := podman.GetImagesJSON(args...)
+ 	if err != nil {
+ 		logrus.Debugf("Fetching all images failed: %s", err)
+ 		return nil, errors.New("failed to get images")
+ 	}
+ 
++	var images []toolboxImage
++	if err := json.Unmarshal(data, &images); err != nil {
++		logrus.Debugf("Fetching all images failed: %s", err)
++		return nil, errors.New("failed to get images")
++	}
++
+ 	var toolboxImages []toolboxImage
+ 
+ 	for _, image := range images {
+-		var i toolboxImage
+-
+-		imageJSON, err := json.Marshal(image)
+-		if err != nil {
+-			logrus.Errorf("failed to marshal toolbox image: %v", err)
+-			continue
+-		}
+-
+-		err = i.UnmarshalJSON(imageJSON)
+-		if err != nil {
+-			logrus.Errorf("failed to unmarshal toolbox image: %v", err)
+-			continue
+-		}
+-
+ 		for label := range toolboxLabels {
+-			if _, ok := i.Labels[label]; ok {
+-				toolboxImages = append(toolboxImages, i)
++			if _, ok := image.Labels[label]; ok {
++				toolboxImages = append(toolboxImages, image)
+ 				break
+ 			}
+ 		}
+diff --git a/src/pkg/podman/podman.go b/src/pkg/podman/podman.go
+index 9099df1eaf2a..76eb907ab20a 100644
+--- a/src/pkg/podman/podman.go
++++ b/src/pkg/podman/podman.go
+@@ -95,14 +95,14 @@ func GetContainers(args ...string) ([]map[string]interface{}, error) {
+ 	return containers, nil
+ }
+ 
+-// GetImages is a wrapper function around `podman images --format json` command.
++// GetImagesJSON is a wrapper function around `podman images --format json` command.
+ //
+ // Parameter args accepts an array of strings to be passed to the wrapped command (eg. ["-a", "--filter", "123"]).
+ //
+-// Returned value is a slice of dynamically unmarshalled json, so it needs to be treated properly.
++// Returned value is the JSON representing the images.
+ //
+ // If a problem happens during execution, first argument is nil and second argument holds the error message.
+-func GetImages(args ...string) ([]map[string]interface{}, error) {
++func GetImagesJSON(args ...string) ([]byte, error) {
+ 	var stdout bytes.Buffer
+ 
+ 	logLevelString := LogLevel.String()
+@@ -111,14 +111,8 @@ func GetImages(args ...string) ([]map[string]interface{}, error) {
+ 		return nil, err
+ 	}
+ 
+-	output := stdout.Bytes()
+-	var images []map[string]interface{}
+-
+-	if err := json.Unmarshal(output, &images); err != nil {
+-		return nil, err
+-	}
+-
+-	return images, nil
++	data := stdout.Bytes()
++	return data, nil
+ }
+ 
+ // GetVersion returns version of Podman in a string
+-- 
+2.38.1
+
+
+From 8aaabe469af22c9fe29cee1be653b40f019b68b7 Mon Sep 17 00:00:00 2001
+From: Debarshi Ray <rishi@fedoraproject.org>
+Date: Tue, 6 Dec 2022 13:22:32 +0100
+Subject: [PATCH 04/27] cmd/list: Rename a variable for ease of grepping
+
+It's better to avoid single letter variables in general, because they
+are so hard to grep for.
+
+This will make the subsequent commit easier to read.
+
+https://github.com/containers/toolbox/pull/1190
+(cherry picked from commit e1ead145fc734fc329364b66a2db2bef15bb9721)
+---
+ src/cmd/list.go | 12 ++++++------
+ 1 file changed, 6 insertions(+), 6 deletions(-)
+
+diff --git a/src/cmd/list.go b/src/cmd/list.go
+index 39fed1d5b772..a839a47dd83c 100644
+--- a/src/cmd/list.go
++++ b/src/cmd/list.go
+@@ -300,7 +300,7 @@ func listOutput(images []toolboxImage, containers []toolboxContainer) {
+ 	}
+ }
+ 
+-func (i *toolboxImage) UnmarshalJSON(data []byte) error {
++func (image *toolboxImage) UnmarshalJSON(data []byte) error {
+ 	var raw struct {
+ 		ID      string
+ 		Names   []string
+@@ -312,19 +312,19 @@ func (i *toolboxImage) UnmarshalJSON(data []byte) error {
+ 		return err
+ 	}
+ 
+-	i.ID = raw.ID
+-	i.Names = raw.Names
++	image.ID = raw.ID
++	image.Names = raw.Names
+ 	// Until Podman 2.0.x the field 'Created' held a human-readable string in
+ 	// format "5 minutes ago". Since Podman 2.1 the field holds an integer with
+ 	// Unix time. Go interprets numbers in JSON as float64.
+ 	switch value := raw.Created.(type) {
+ 	case string:
+-		i.Created = value
++		image.Created = value
+ 	case float64:
+-		i.Created = utils.HumanDuration(int64(value))
++		image.Created = utils.HumanDuration(int64(value))
+ 	}
+ 
+-	i.Labels = raw.Labels
++	image.Labels = raw.Labels
+ 
+ 	return nil
+ }
+-- 
+2.38.1
+
+
+From 9378c81c4641ead00beb2aa6549b6c371e7e71f0 Mon Sep 17 00:00:00 2001
+From: Debarshi Ray <rishi@fedoraproject.org>
+Date: Tue, 6 Dec 2022 13:24:19 +0100
+Subject: [PATCH 05/27] cmd/list: Style fixes
+
+This will make the subsequent commit easier to read.
+
+https://github.com/containers/toolbox/pull/1190
+(cherry picked from commit 5baf3162a9b8e6b554e4306ea79373e3a80ac7e4)
+---
+ src/cmd/list.go | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/cmd/list.go b/src/cmd/list.go
+index a839a47dd83c..fa28ca935ce8 100644
+--- a/src/cmd/list.go
++++ b/src/cmd/list.go
+@@ -314,6 +314,7 @@ func (image *toolboxImage) UnmarshalJSON(data []byte) error {
+ 
+ 	image.ID = raw.ID
+ 	image.Names = raw.Names
++
+ 	// Until Podman 2.0.x the field 'Created' held a human-readable string in
+ 	// format "5 minutes ago". Since Podman 2.1 the field holds an integer with
+ 	// Unix time. Go interprets numbers in JSON as float64.
+@@ -325,7 +326,6 @@ func (image *toolboxImage) UnmarshalJSON(data []byte) error {
+ 	}
+ 
+ 	image.Labels = raw.Labels
+-
+ 	return nil
+ }
+ 
+-- 
+2.38.1
+
+
+From ea33c5f8bd44d1f8304ee3017c15422c70f82934 Mon Sep 17 00:00:00 2001
+From: Debarshi Ray <rishi@fedoraproject.org>
+Date: Tue, 6 Dec 2022 13:20:42 +0100
+Subject: [PATCH 06/27] cmd/list, pkg/podman: Limit access to the raw 'podman
+ images' JSON
+
+This builds on top of commit 0465d78fd9034ce9.
+
+The toolboxImage type has been renamed to Image and moved into the
+podman package.
+
+There is nothing Toolbx specific about the type - it represents any
+image returned by 'podman images'.  The images are only later filtered
+for Toolbx images.
+
+Secondly, having the Image type inside the podman package makes it
+possible to encapsulate the unmarshalling of the JSON within the package
+without exposing the raw JSON to outside consumers.  This is desirable
+because the unmarshalling involves tracking changes in the JSON output
+by different Podman versions, and it's better to limit such details to
+the podman package.
+
+https://github.com/containers/toolbox/pull/1190
+(cherry picked from commit 5f324d537ed875cacd27d711e4af37e0847ca32b)
+---
+ src/cmd/list.go          | 52 ++++------------------------------------
+ src/pkg/podman/podman.go | 50 ++++++++++++++++++++++++++++++++++----
+ 2 files changed, 51 insertions(+), 51 deletions(-)
+
+diff --git a/src/cmd/list.go b/src/cmd/list.go
+index fa28ca935ce8..9493a54593af 100644
+--- a/src/cmd/list.go
++++ b/src/cmd/list.go
+@@ -30,13 +30,6 @@ import (
+ 	"github.com/spf13/cobra"
+ )
+ 
+-type toolboxImage struct {
+-	ID      string
+-	Names   []string
+-	Created string
+-	Labels  map[string]string
+-}
+-
+ type toolboxContainer struct {
+ 	ID      string
+ 	Names   []string
+@@ -106,7 +99,7 @@ func list(cmd *cobra.Command, args []string) error {
+ 		lsImages = false
+ 	}
+ 
+-	var images []toolboxImage
++	var images []podman.Image
+ 	var containers []toolboxContainer
+ 	var err error
+ 
+@@ -186,22 +179,16 @@ func listHelp(cmd *cobra.Command, args []string) {
+ 	}
+ }
+ 
+-func getImages() ([]toolboxImage, error) {
++func getImages() ([]podman.Image, error) {
+ 	logrus.Debug("Fetching all images")
+ 	args := []string{"--sort", "repository"}
+-	data, err := podman.GetImagesJSON(args...)
++	images, err := podman.GetImages(args...)
+ 	if err != nil {
+ 		logrus.Debugf("Fetching all images failed: %s", err)
+ 		return nil, errors.New("failed to get images")
+ 	}
+ 
+-	var images []toolboxImage
+-	if err := json.Unmarshal(data, &images); err != nil {
+-		logrus.Debugf("Fetching all images failed: %s", err)
+-		return nil, errors.New("failed to get images")
+-	}
+-
+-	var toolboxImages []toolboxImage
++	var toolboxImages []podman.Image
+ 
+ 	for _, image := range images {
+ 		for label := range toolboxLabels {
+@@ -215,7 +202,7 @@ func getImages() ([]toolboxImage, error) {
+ 	return toolboxImages, nil
+ }
+ 
+-func listOutput(images []toolboxImage, containers []toolboxContainer) {
++func listOutput(images []podman.Image, containers []toolboxContainer) {
+ 	if len(images) != 0 {
+ 		writer := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+ 		fmt.Fprintf(writer, "%s\t%s\t%s\n", "IMAGE ID", "IMAGE NAME", "CREATED")
+@@ -300,35 +287,6 @@ func listOutput(images []toolboxImage, containers []toolboxContainer) {
+ 	}
+ }
+ 
+-func (image *toolboxImage) UnmarshalJSON(data []byte) error {
+-	var raw struct {
+-		ID      string
+-		Names   []string
+-		Created interface{}
+-		Labels  map[string]string
+-	}
+-
+-	if err := json.Unmarshal(data, &raw); err != nil {
+-		return err
+-	}
+-
+-	image.ID = raw.ID
+-	image.Names = raw.Names
+-
+-	// Until Podman 2.0.x the field 'Created' held a human-readable string in
+-	// format "5 minutes ago". Since Podman 2.1 the field holds an integer with
+-	// Unix time. Go interprets numbers in JSON as float64.
+-	switch value := raw.Created.(type) {
+-	case string:
+-		image.Created = value
+-	case float64:
+-		image.Created = utils.HumanDuration(int64(value))
+-	}
+-
+-	image.Labels = raw.Labels
+-	return nil
+-}
+-
+ func (c *toolboxContainer) UnmarshalJSON(data []byte) error {
+ 	var raw struct {
+ 		ID      string
+diff --git a/src/pkg/podman/podman.go b/src/pkg/podman/podman.go
+index 76eb907ab20a..623116707f36 100644
+--- a/src/pkg/podman/podman.go
++++ b/src/pkg/podman/podman.go
+@@ -24,9 +24,17 @@ import (
+ 
+ 	"github.com/HarryMichal/go-version"
+ 	"github.com/containers/toolbox/pkg/shell"
++	"github.com/containers/toolbox/pkg/utils"
+ 	"github.com/sirupsen/logrus"
+ )
+ 
++type Image struct {
++	ID      string
++	Names   []string
++	Created string
++	Labels  map[string]string
++}
++
+ var (
+ 	podmanVersion string
+ )
+@@ -35,6 +43,35 @@ var (
+ 	LogLevel = logrus.ErrorLevel
+ )
+ 
++func (image *Image) UnmarshalJSON(data []byte) error {
++	var raw struct {
++		ID      string
++		Names   []string
++		Created interface{}
++		Labels  map[string]string
++	}
++
++	if err := json.Unmarshal(data, &raw); err != nil {
++		return err
++	}
++
++	image.ID = raw.ID
++	image.Names = raw.Names
++
++	// Until Podman 2.0.x the field 'Created' held a human-readable string in
++	// format "5 minutes ago". Since Podman 2.1 the field holds an integer with
++	// Unix time. Go interprets numbers in JSON as float64.
++	switch value := raw.Created.(type) {
++	case string:
++		image.Created = value
++	case float64:
++		image.Created = utils.HumanDuration(int64(value))
++	}
++
++	image.Labels = raw.Labels
++	return nil
++}
++
+ // CheckVersion compares provided version with the version of Podman.
+ //
+ // Takes in one string parameter that should be in the format that is used for versioning (eg. 1.0.0, 2.5.1-dev).
+@@ -95,14 +132,14 @@ func GetContainers(args ...string) ([]map[string]interface{}, error) {
+ 	return containers, nil
+ }
+ 
+-// GetImagesJSON is a wrapper function around `podman images --format json` command.
++// GetImages is a wrapper function around `podman images --format json` command.
+ //
+ // Parameter args accepts an array of strings to be passed to the wrapped command (eg. ["-a", "--filter", "123"]).
+ //
+-// Returned value is the JSON representing the images.
++// Returned value is a slice of Images.
+ //
+ // If a problem happens during execution, first argument is nil and second argument holds the error message.
+-func GetImagesJSON(args ...string) ([]byte, error) {
++func GetImages(args ...string) ([]Image, error) {
+ 	var stdout bytes.Buffer
+ 
+ 	logLevelString := LogLevel.String()
+@@ -112,7 +149,12 @@ func GetImagesJSON(args ...string) ([]byte, error) {
+ 	}
+ 
+ 	data := stdout.Bytes()
+-	return data, nil
++	var images []Image
++	if err := json.Unmarshal(data, &images); err != nil {
++		return nil, err
++	}
++
++	return images, nil
+ }
+ 
+ // GetVersion returns version of Podman in a string
+-- 
+2.38.1
+
+
+From 5a2de56ad4d3222eef60cd30b09e18d81e042693 Mon Sep 17 00:00:00 2001
+From: Debarshi Ray <rishi@fedoraproject.org>
+Date: Thu, 8 Dec 2022 00:22:38 +0100
+Subject: [PATCH 07/27] test/system: Remove stray (possibly for debugging)
+ 'podman images'
+
+This was making it difficult to read the Bats assertions on test
+failures, by polluting it with unexpected and irrelevant output from
+'podman images'.  For example [1]:
+  not ok 39 list: Images with and without names in 12332ms
+  # (from function `assert' in file test/system/libs/bats-assert/src/assert.bash, line 46,
+  #  in test file test/system/102-list.bats, line 126)
+  #   `assert [ ${#stderr_lines[@]} -eq 0 ]' failed
+  # REPOSITORY                                 TAG         IMAGE ID      CREATED      SIZE
+  # registry.fedoraproject.org/fedora-toolbox  35          862705390e8b  4 weeks ago  332 MB
+  # REPOSITORY                                 TAG         IMAGE ID      CREATED       SIZE
+  # registry.fedoraproject.org/fedora-toolbox  35          862705390e8b  4 weeks ago   332 MB
+  # registry.fedoraproject.org/fedora-toolbox  34          70cbe2ce60ca  7 months ago  354 MB
+  #
+  # -- assertion failed --
+  # expression : [ 1 -eq 0 ]
+  # --
+  #
+
+Fallout from 7973181136494a4ba147808c9ad51ace9aa4305f
+
+[1] https://github.com/containers/toolbox/pull/1192
+
+https://github.com/containers/toolbox/pull/1193
+(cherry picked from commit 7375be82d094204055ff056eba7820eef3f8247f)
+---
+ test/system/libs/helpers.bash | 2 --
+ 1 file changed, 2 deletions(-)
+
+diff --git a/test/system/libs/helpers.bash b/test/system/libs/helpers.bash
+index d728c0fc5f20..4e396e60f4bf 100644
+--- a/test/system/libs/helpers.bash
++++ b/test/system/libs/helpers.bash
+@@ -162,8 +162,6 @@ function pull_distro_image() {
+     echo "Failed to load image ${image} from cache ${IMAGE_CACHE_DIR}/${image_archive}"
+     assert_success
+   fi
+-
+-  $PODMAN images
+ }
+ 
+ 
+-- 
+2.38.1
+
+
+From 57b04bb56b6ddf821fa9b82c6ee21de9c4d60779 Mon Sep 17 00:00:00 2001
+From: Debarshi Ray <rishi@fedoraproject.org>
+Date: Wed, 7 Dec 2022 13:34:38 +0100
+Subject: [PATCH 08/27] test/system: Test the order in 'list' for images and
+ containers
+
+https://github.com/containers/toolbox/pull/1192
+(backported from commit da1724c8968c7169d3cfb7dc1730af27b6abab7d)
+---
+ test/system/102-list.bats | 20 ++++++++++----------
+ 1 file changed, 10 insertions(+), 10 deletions(-)
+
+diff --git a/test/system/102-list.bats b/test/system/102-list.bats
+index 1989409b1207..3f99c041f8cc 100644
+--- a/test/system/102-list.bats
++++ b/test/system/102-list.bats
+@@ -62,26 +62,26 @@ teardown() {
+   run $TOOLBOX list --images
+ 
+   assert_success
+-  assert_output --partial "$(get_system_id)-toolbox:$(get_system_version)"
+-  assert_output --partial "fedora-toolbox:32"
++  assert_line --index 1 --partial "$(get_system_id)-toolbox:$(get_system_version)"
++  assert_line --index 2 --partial "fedora-toolbox:32"
+ 
+   # Check containers
+   run $TOOLBOX list --containers
+ 
+   assert_success
+-  assert_output --partial "$(get_system_id)-toolbox-$(get_system_version)"
+-  assert_output --partial "non-default-one"
+-  assert_output --partial "non-default-two"
++  assert_line --index 1 --partial "$(get_system_id)-toolbox-$(get_system_version)"
++  assert_line --index 2 --partial "non-default-one"
++  assert_line --index 3 --partial "non-default-two"
+ 
+   # Check all together
+   run $TOOLBOX list
+ 
+   assert_success
+-  assert_output --partial "$(get_system_id)-toolbox:$(get_system_version)"
+-  assert_output --partial "fedora-toolbox:32"
+-  assert_output --partial "$(get_system_id)-toolbox-$(get_system_version)"
+-  assert_output --partial "non-default-one"
+-  assert_output --partial "non-default-two"
++  assert_line --index 1 --partial "$(get_system_id)-toolbox:$(get_system_version)"
++  assert_line --index 2 --partial "fedora-toolbox:32"
++  assert_line --index 4 --partial "$(get_system_id)-toolbox-$(get_system_version)"
++  assert_line --index 5 --partial "non-default-one"
++  assert_line --index 6 --partial "non-default-two"
+ }
+ 
+ @test "list: List an image without a name" {
+-- 
+2.38.1
+
+
+From be0e67b673f1ff399289e4f4c0837637979b12d8 Mon Sep 17 00:00:00 2001
+From: Debarshi Ray <rishi@fedoraproject.org>
+Date: Wed, 7 Dec 2022 15:22:04 +0100
+Subject: [PATCH 09/27] test/system: Keep empty lines to prevent missing and
+ spurious newlines
+
+The tests are intended for Toolbx, not Podman or other commands.  Hence,
+it's only necessary to keep the empty lines for Toolbx invocations.
+Being too sensitive about the exact output of other commands can lead to
+spurious failures [1].
+
+[1] Commit 259afdf815e718b7
+    https://github.com/containers/toolbox/pull/846
+
+https://github.com/containers/toolbox/pull/1192
+(backported from commit 0fde202d82a781849169dab8cfb5d2aa0184d970)
+---
+ test/system/102-list.bats | 22 +++++++++++-----------
+ 1 file changed, 11 insertions(+), 11 deletions(-)
+
+diff --git a/test/system/102-list.bats b/test/system/102-list.bats
+index 3f99c041f8cc..620626739411 100644
+--- a/test/system/102-list.bats
++++ b/test/system/102-list.bats
+@@ -15,21 +15,21 @@ teardown() {
+ 
+ 
+ @test "list: Run 'list' with zero containers and zero images (the list should be empty)" {
+-  run $TOOLBOX list
++  run --keep-empty-lines $TOOLBOX list
+ 
+   assert_success
+   assert_output ""
+ }
+ 
+ @test "list: Run 'list -c' with zero containers (the list should be empty)" {
+-  run $TOOLBOX list -c
++  run --keep-empty-lines $TOOLBOX list -c
+ 
+   assert_success
+   assert_output ""
+ }
+ 
+ @test "list: Run 'list -i' with zero images (the list should be empty)" {
+-  run $TOOLBOX list -i
++  run --keep-empty-lines $TOOLBOX list -i
+ 
+   assert_success
+   assert_output ""
+@@ -42,7 +42,7 @@ teardown() {
+ 
+   assert_output --partial "$BUSYBOX_IMAGE"
+ 
+-  run $TOOLBOX list
++  run --keep-empty-lines $TOOLBOX list
+ 
+   assert_success
+   assert_output ""
+@@ -59,14 +59,14 @@ teardown() {
+   create_container non-default-two
+ 
+   # Check images
+-  run $TOOLBOX list --images
++  run --keep-empty-lines $TOOLBOX list --images
+ 
+   assert_success
+   assert_line --index 1 --partial "$(get_system_id)-toolbox:$(get_system_version)"
+   assert_line --index 2 --partial "fedora-toolbox:32"
+ 
+   # Check containers
+-  run $TOOLBOX list --containers
++  run --keep-empty-lines $TOOLBOX list --containers
+ 
+   assert_success
+   assert_line --index 1 --partial "$(get_system_id)-toolbox-$(get_system_version)"
+@@ -74,14 +74,14 @@ teardown() {
+   assert_line --index 3 --partial "non-default-two"
+ 
+   # Check all together
+-  run $TOOLBOX list
++  run --keep-empty-lines $TOOLBOX list
+ 
+   assert_success
+   assert_line --index 1 --partial "$(get_system_id)-toolbox:$(get_system_version)"
+   assert_line --index 2 --partial "fedora-toolbox:32"
+-  assert_line --index 4 --partial "$(get_system_id)-toolbox-$(get_system_version)"
+-  assert_line --index 5 --partial "non-default-one"
+-  assert_line --index 6 --partial "non-default-two"
++  assert_line --index 5 --partial "$(get_system_id)-toolbox-$(get_system_version)"
++  assert_line --index 6 --partial "non-default-one"
++  assert_line --index 7 --partial "non-default-two"
+ }
+ 
+ @test "list: List an image without a name" {
+@@ -95,7 +95,7 @@ teardown() {
+     assert_line --index 2 --partial "COMMIT"
+     assert_line --index 3 --regexp "^--> [a-z0-9]*$"
+ 
+-    run $TOOLBOX list
++    run --keep-empty-lines $TOOLBOX list
+ 
+     assert_success
+     assert_line --index 1 --partial "<none>"
+-- 
+2.38.1
+
+
+From 000b678db0f3ba28f2a349cad926d9e19893070c Mon Sep 17 00:00:00 2001
+From: Debarshi Ray <rishi@fedoraproject.org>
+Date: Wed, 7 Dec 2022 20:01:38 +0100
+Subject: [PATCH 10/27] test/system: Fix indentation
+
+https://github.com/containers/toolbox/pull/1192
+(cherry picked from commit f0a805af844a5867ea61c2ef899bffe24d7d24b1)
+---
+ test/system/102-list.bats | 22 +++++++++++-----------
+ 1 file changed, 11 insertions(+), 11 deletions(-)
+
+diff --git a/test/system/102-list.bats b/test/system/102-list.bats
+index 620626739411..946992030183 100644
+--- a/test/system/102-list.bats
++++ b/test/system/102-list.bats
+@@ -85,20 +85,20 @@ teardown() {
+ }
+ 
+ @test "list: List an image without a name" {
+-    echo -e "FROM scratch\n\nLABEL com.github.containers.toolbox=\"true\"" > "$BATS_TMPDIR"/Containerfile
++  echo -e "FROM scratch\n\nLABEL com.github.containers.toolbox=\"true\"" > "$BATS_TMPDIR"/Containerfile
+ 
+-    run $PODMAN build "$BATS_TMPDIR"
++  run $PODMAN build "$BATS_TMPDIR"
+ 
+-    assert_success
+-    assert_line --index 0 --partial "FROM scratch"
+-    assert_line --index 1 --partial "LABEL com.github.containers.toolbox=\"true\""
+-    assert_line --index 2 --partial "COMMIT"
+-    assert_line --index 3 --regexp "^--> [a-z0-9]*$"
++  assert_success
++  assert_line --index 0 --partial "FROM scratch"
++  assert_line --index 1 --partial "LABEL com.github.containers.toolbox=\"true\""
++  assert_line --index 2 --partial "COMMIT"
++  assert_line --index 3 --regexp "^--> [a-z0-9]*$"
+ 
+-    run --keep-empty-lines $TOOLBOX list
++  run --keep-empty-lines $TOOLBOX list
+ 
+-    assert_success
+-    assert_line --index 1 --partial "<none>"
++  assert_success
++  assert_line --index 1 --partial "<none>"
+ 
+-    rm -f "$BATS_TMPDIR"/Containerfile
++  rm -f "$BATS_TMPDIR"/Containerfile
+ }
+-- 
+2.38.1
+
+
+From 8c17c3454cfab3e35d176c17f0877da0443ed2df Mon Sep 17 00:00:00 2001
+From: Debarshi Ray <rishi@fedoraproject.org>
+Date: Wed, 7 Dec 2022 19:21:31 +0100
+Subject: [PATCH 11/27] test/system: Group the test cases somewhat logically
+
+A subsequent commit will test the order in which images with and without
+names are listed.  It's logical for that test to come after the one
+about the basic support for images without names.
+
+https://github.com/containers/toolbox/pull/1192
+(cherry picked from commit 54f09ae8a6a5034a30b98b3d281e5e46ce279bd3)
+---
+ test/system/102-list.bats | 38 +++++++++++++++++++-------------------
+ 1 file changed, 19 insertions(+), 19 deletions(-)
+
+diff --git a/test/system/102-list.bats b/test/system/102-list.bats
+index 946992030183..1ffaee486e30 100644
+--- a/test/system/102-list.bats
++++ b/test/system/102-list.bats
+@@ -48,6 +48,25 @@ teardown() {
+   assert_output ""
+ }
+ 
++@test "list: List an image without a name" {
++  echo -e "FROM scratch\n\nLABEL com.github.containers.toolbox=\"true\"" > "$BATS_TMPDIR"/Containerfile
++
++  run $PODMAN build "$BATS_TMPDIR"
++
++  assert_success
++  assert_line --index 0 --partial "FROM scratch"
++  assert_line --index 1 --partial "LABEL com.github.containers.toolbox=\"true\""
++  assert_line --index 2 --partial "COMMIT"
++  assert_line --index 3 --regexp "^--> [a-z0-9]*$"
++
++  run --keep-empty-lines $TOOLBOX list
++
++  assert_success
++  assert_line --index 1 --partial "<none>"
++
++  rm -f "$BATS_TMPDIR"/Containerfile
++}
++
+ @test "list: Try to list images and containers (no flag) with 3 containers and 2 images (the list should have 3 images and 2 containers)" {
+   # Pull the two images
+   pull_default_image
+@@ -83,22 +102,3 @@ teardown() {
+   assert_line --index 6 --partial "non-default-one"
+   assert_line --index 7 --partial "non-default-two"
+ }
+-
+-@test "list: List an image without a name" {
+-  echo -e "FROM scratch\n\nLABEL com.github.containers.toolbox=\"true\"" > "$BATS_TMPDIR"/Containerfile
+-
+-  run $PODMAN build "$BATS_TMPDIR"
+-
+-  assert_success
+-  assert_line --index 0 --partial "FROM scratch"
+-  assert_line --index 1 --partial "LABEL com.github.containers.toolbox=\"true\""
+-  assert_line --index 2 --partial "COMMIT"
+-  assert_line --index 3 --regexp "^--> [a-z0-9]*$"
+-
+-  run --keep-empty-lines $TOOLBOX list
+-
+-  assert_success
+-  assert_line --index 1 --partial "<none>"
+-
+-  rm -f "$BATS_TMPDIR"/Containerfile
+-}
+-- 
+2.38.1
+
+
+From 099a51666994add5f5b11229fe73c8c4b5dc38b5 Mon Sep 17 00:00:00 2001
+From: Debarshi Ray <rishi@fedoraproject.org>
+Date: Wed, 7 Dec 2022 19:51:15 +0100
+Subject: [PATCH 12/27] test/system: Split out the code to build an image
+ without a name
+
+This will be used by a subsequent commit to test the order in which
+images with and without names are listed.
+
+https://github.com/containers/toolbox/pull/1192
+(backported from commit cc60bc68936dcbdca1d08635fdcdf9fb50301358)
+---
+ test/system/102-list.bats     | 12 +-----------
+ test/system/libs/helpers.bash | 15 +++++++++++++++
+ 2 files changed, 16 insertions(+), 11 deletions(-)
+
+diff --git a/test/system/102-list.bats b/test/system/102-list.bats
+index 1ffaee486e30..c2a44162afe3 100644
+--- a/test/system/102-list.bats
++++ b/test/system/102-list.bats
+@@ -49,22 +49,12 @@ teardown() {
+ }
+ 
+ @test "list: List an image without a name" {
+-  echo -e "FROM scratch\n\nLABEL com.github.containers.toolbox=\"true\"" > "$BATS_TMPDIR"/Containerfile
+-
+-  run $PODMAN build "$BATS_TMPDIR"
+-
+-  assert_success
+-  assert_line --index 0 --partial "FROM scratch"
+-  assert_line --index 1 --partial "LABEL com.github.containers.toolbox=\"true\""
+-  assert_line --index 2 --partial "COMMIT"
+-  assert_line --index 3 --regexp "^--> [a-z0-9]*$"
++  build_image_without_name
+ 
+   run --keep-empty-lines $TOOLBOX list
+ 
+   assert_success
+   assert_line --index 1 --partial "<none>"
+-
+-  rm -f "$BATS_TMPDIR"/Containerfile
+ }
+ 
+ @test "list: Try to list images and containers (no flag) with 3 containers and 2 images (the list should have 3 images and 2 containers)" {
+diff --git a/test/system/libs/helpers.bash b/test/system/libs/helpers.bash
+index 4e396e60f4bf..f585699aa3f7 100644
+--- a/test/system/libs/helpers.bash
++++ b/test/system/libs/helpers.bash
+@@ -119,6 +119,21 @@ function _clean_cached_images() {
+ }
+ 
+ 
++function build_image_without_name() {
++  echo -e "FROM scratch\n\nLABEL com.github.containers.toolbox=\"true\"" > "$BATS_TMPDIR"/Containerfile
++
++  run $PODMAN build "$BATS_TMPDIR"
++
++  assert_success
++  assert_line --index 0 --partial "FROM scratch"
++  assert_line --index 1 --partial "LABEL com.github.containers.toolbox=\"true\""
++  assert_line --index 2 --partial "COMMIT"
++  assert_line --index 3 --regexp "^--> [a-z0-9]*$"
++
++  rm -f "$BATS_TMPDIR"/Containerfile
++}
++
++
+ # Copies an image from local storage to Podman's image store
+ # 
+ # Call before creating any container. Network failures are not nice.
+-- 
+2.38.1
+
+
+From a2ba49f350d2ad543c494bdbf2781c883b2483b3 Mon Sep 17 00:00:00 2001
+From: Debarshi Ray <rishi@fedoraproject.org>
+Date: Wed, 7 Dec 2022 19:52:50 +0100
+Subject: [PATCH 13/27] test/system: Test the order in 'list' for images with &
+ without names
+
+Note that 'run --keep-empty-lines' counts the trailing newline on the
+last line as a separate line.
+
+Until Bats 1.7.0, 'run --keep-empty-lines' had a bug where even when a
+command produced no output, it would report a line count of one [1] due
+to a stray line feed character.  This needs to be conditionalized, since
+Fedora 35 has Bats 1.5.0.
+
+[1] https://github.com/bats-core/bats-core/issues/573
+
+https://github.com/containers/toolbox/pull/1192
+(cherry picked from commit 4d1cc5b39bac89e95f403b8992a26f93eeefaa6e)
+---
+ test/system/102-list.bats     | 20 ++++++++++++++++++++
+ test/system/libs/helpers.bash | 30 ++++++++++++++++++++++++++++++
+ 2 files changed, 50 insertions(+)
+
+diff --git a/test/system/102-list.bats b/test/system/102-list.bats
+index c2a44162afe3..872f3ffde7fe 100644
+--- a/test/system/102-list.bats
++++ b/test/system/102-list.bats
+@@ -92,3 +92,23 @@ teardown() {
+   assert_line --index 6 --partial "non-default-one"
+   assert_line --index 7 --partial "non-default-two"
+ }
++
++@test "list: Images with and without names" {
++  local default_image
++  default_image="$(get_default_image)"
++
++  pull_default_image
++  pull_distro_image fedora 34
++  build_image_without_name
++
++  run --keep-empty-lines --separate-stderr "$TOOLBOX" list --images
++
++  assert_success
++  assert_line --index 1 --partial "<none>"
++  assert_line --index 2 --partial "$default_image"
++  assert_line --index 3 --partial "fedora-toolbox:34"
++  assert [ ${#lines[@]} -eq 5 ]
++  if check_bats_version 1.7.0; then
++    assert [ ${#stderr_lines[@]} -eq 0 ]
++  fi
++}
+diff --git a/test/system/libs/helpers.bash b/test/system/libs/helpers.bash
+index f585699aa3f7..4d095043d3ce 100644
+--- a/test/system/libs/helpers.bash
++++ b/test/system/libs/helpers.bash
+@@ -134,6 +134,36 @@ function build_image_without_name() {
+ }
+ 
+ 
++function check_bats_version() {
++    local required_version
++    required_version="$1"
++
++    if ! old_version=$(printf "%s\n%s\n" "$BATS_VERSION" "$required_version" | sort --version-sort | head --lines 1); then
++        return 1
++    fi
++
++    if [ "$required_version" = "$old_version" ]; then
++        return 0
++    fi
++
++    return 1
++}
++
++
++function get_default_image() {
++  local distro
++  local image
++  local release
++
++  distro="$(get_system_id)"
++  release="$(get_system_version)"
++  image="${IMAGES[$distro]}:$release"
++
++  echo "$image"
++  return 0
++}
++
++
+ # Copies an image from local storage to Podman's image store
+ # 
+ # Call before creating any container. Network failures are not nice.
+-- 
+2.38.1
+
+
+From b16ff0a401b15408a3c696bbd679a12615a09ccd Mon Sep 17 00:00:00 2001
+From: Debarshi Ray <rishi@fedoraproject.org>
+Date: Wed, 7 Dec 2022 21:02:17 +0100
+Subject: [PATCH 14/27] test/system: Ensure that non-error messages go to the
+ standard output
+
+https://github.com/containers/toolbox/pull/1192
+(cherry picked from commit 89385e12b5e1e931ef40c3f0f0edeb563cf5dd77)
+---
+ test/system/102-list.bats | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/test/system/102-list.bats b/test/system/102-list.bats
+index 872f3ffde7fe..51cb5aa349f9 100644
+--- a/test/system/102-list.bats
++++ b/test/system/102-list.bats
+@@ -51,7 +51,7 @@ teardown() {
+ @test "list: List an image without a name" {
+   build_image_without_name
+ 
+-  run --keep-empty-lines $TOOLBOX list
++  run --keep-empty-lines --separate-stderr $TOOLBOX list
+ 
+   assert_success
+   assert_line --index 1 --partial "<none>"
+@@ -68,14 +68,14 @@ teardown() {
+   create_container non-default-two
+ 
+   # Check images
+-  run --keep-empty-lines $TOOLBOX list --images
++  run --keep-empty-lines --separate-stderr $TOOLBOX list --images
+ 
+   assert_success
+   assert_line --index 1 --partial "$(get_system_id)-toolbox:$(get_system_version)"
+   assert_line --index 2 --partial "fedora-toolbox:32"
+ 
+   # Check containers
+-  run --keep-empty-lines $TOOLBOX list --containers
++  run --keep-empty-lines --separate-stderr $TOOLBOX list --containers
+ 
+   assert_success
+   assert_line --index 1 --partial "$(get_system_id)-toolbox-$(get_system_version)"
+@@ -83,7 +83,7 @@ teardown() {
+   assert_line --index 3 --partial "non-default-two"
+ 
+   # Check all together
+-  run --keep-empty-lines $TOOLBOX list
++  run --keep-empty-lines --separate-stderr $TOOLBOX list
+ 
+   assert_success
+   assert_line --index 1 --partial "$(get_system_id)-toolbox:$(get_system_version)"
+-- 
+2.38.1
+
+
+From c97472cec4f243b6323f349f60b558b0f4f8540f Mon Sep 17 00:00:00 2001
+From: Debarshi Ray <rishi@fedoraproject.org>
+Date: Wed, 7 Dec 2022 21:16:46 +0100
+Subject: [PATCH 15/27] test/system: Check the line count in the standard error
+ & output streams
+
+Note that 'run --keep-empty-lines' counts the trailing newline on the
+last line as a separate line.
+
+Until Bats 1.7.0, 'run --keep-empty-lines' had a bug where even when a
+command produced no output, it would report a line count of one [1] due
+to a stray line feed character.  This needs to be conditionalized, since
+Fedora 35 has Bats 1.5.0.
+
+[1] https://github.com/bats-core/bats-core/issues/573
+
+https://github.com/containers/toolbox/pull/1192
+(backported from commit f17a632f9a4a2859f12fd20dc8a34bf0a6dd2ae5)
+---
+ test/system/102-list.bats | 16 ++++++++++++++++
+ 1 file changed, 16 insertions(+)
+
+diff --git a/test/system/102-list.bats b/test/system/102-list.bats
+index 51cb5aa349f9..9ed6ed3cf847 100644
+--- a/test/system/102-list.bats
++++ b/test/system/102-list.bats
+@@ -55,6 +55,10 @@ teardown() {
+ 
+   assert_success
+   assert_line --index 1 --partial "<none>"
++  assert [ ${#lines[@]} -eq 3 ]
++  if check_bats_version 1.7.0; then
++    assert [ ${#stderr_lines[@]} -eq 0 ]
++  fi
+ }
+ 
+ @test "list: Try to list images and containers (no flag) with 3 containers and 2 images (the list should have 3 images and 2 containers)" {
+@@ -73,6 +77,10 @@ teardown() {
+   assert_success
+   assert_line --index 1 --partial "$(get_system_id)-toolbox:$(get_system_version)"
+   assert_line --index 2 --partial "fedora-toolbox:32"
++  assert [ ${#lines[@]} -eq 4 ]
++  if check_bats_version 1.7.0; then
++    assert [ ${#stderr_lines[@]} -eq 0 ]
++  fi
+ 
+   # Check containers
+   run --keep-empty-lines --separate-stderr $TOOLBOX list --containers
+@@ -81,6 +89,10 @@ teardown() {
+   assert_line --index 1 --partial "$(get_system_id)-toolbox-$(get_system_version)"
+   assert_line --index 2 --partial "non-default-one"
+   assert_line --index 3 --partial "non-default-two"
++  assert [ ${#lines[@]} -eq 5 ]
++  if check_bats_version 1.7.0; then
++    assert [ ${#stderr_lines[@]} -eq 0 ]
++  fi
+ 
+   # Check all together
+   run --keep-empty-lines --separate-stderr $TOOLBOX list
+@@ -91,6 +103,10 @@ teardown() {
+   assert_line --index 5 --partial "$(get_system_id)-toolbox-$(get_system_version)"
+   assert_line --index 6 --partial "non-default-one"
+   assert_line --index 7 --partial "non-default-two"
++  assert [ ${#lines[@]} -eq 9 ]
++  if check_bats_version 1.7.0; then
++    assert [ ${#stderr_lines[@]} -eq 0 ]
++  fi
+ }
+ 
+ @test "list: Images with and without names" {
+-- 
+2.38.1
+
+
+From ad4050c5ea6d4ebeb22d5cb9201fd529cebfe2e0 Mon Sep 17 00:00:00 2001
+From: Debarshi Ray <rishi@fedoraproject.org>
+Date: Mon, 12 Dec 2022 14:54:17 +0100
+Subject: [PATCH 16/27] test/system: Use long options, instead of their shorter
+ aliases
+
+The long options are easier to grep(1) for in the sources than their
+shorter aliases.
+
+https://github.com/containers/toolbox/pull/1197
+(backported from commit 5e8446971c65f0c74e08dc8424568b53dc4da21d)
+---
+ test/system/libs/helpers.bash | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/test/system/libs/helpers.bash b/test/system/libs/helpers.bash
+index 4d095043d3ce..edc619005de5 100644
+--- a/test/system/libs/helpers.bash
++++ b/test/system/libs/helpers.bash
+@@ -45,7 +45,7 @@ function _setup_containers_store() {
+ 
+ 
+ function _clean_temporary_storage() {
+-  rm -rf ${TEMP_STORAGE_DIR}
++  rm --force --recursive ${TEMP_STORAGE_DIR}
+ }
+ 
+ 
+@@ -115,7 +115,7 @@ function _pull_and_cache_distro_image() {
+ 
+ # Removes the folder with cached images
+ function _clean_cached_images() {
+-  rm -rf ${IMAGE_CACHE_DIR}
++  rm --force --recursive ${IMAGE_CACHE_DIR}
+ }
+ 
+ 
+@@ -320,12 +320,12 @@ function stop_container() {
+ 
+ 
+ function list_images() {
+-  $PODMAN images --all --quiet | wc -l
++  $PODMAN images --all --quiet | wc --lines
+ }
+ 
+ 
+ function list_containers() {
+-  $PODMAN ps --all --quiet | wc -l
++  $PODMAN ps --all --quiet | wc --lines
+ }
+ 
+ 
+-- 
+2.38.1
+
+
+From 9640c5f40e363558ef880e93f0a2ec69fdfd5a2f Mon Sep 17 00:00:00 2001
+From: Debarshi Ray <rishi@fedoraproject.org>
+Date: Mon, 12 Dec 2022 15:04:42 +0100
+Subject: [PATCH 17/27] test/system: Don't ignore copies when counting images
+
+If an image was copied with:
+  $ skopeo copy \
+      containers-storage:registry.fedoraproject.org/fedora-toolbox:36 \
+      containers-storage:localhost/fedora-toolbox:36
+
+... or:
+  $ podman tag \
+      registry.fedoraproject.org/fedora-toolbox:36 \
+      localhost/fedora-toolbox:36
+
+... then the image ID is only showed once in 'podman images --quiet',
+not twice.
+
+A subsequent commit will use this to write tests to ensure that copied
+images are correctly handled.
+
+https://github.com/containers/toolbox/issues/1043
+(cherry picked from commit 303c7ae99aba118602713af1dd93a0f191a51541)
+---
+ test/system/libs/helpers.bash | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/test/system/libs/helpers.bash b/test/system/libs/helpers.bash
+index edc619005de5..a4e02c1dd0a3 100644
+--- a/test/system/libs/helpers.bash
++++ b/test/system/libs/helpers.bash
+@@ -320,7 +320,7 @@ function stop_container() {
+ 
+ 
+ function list_images() {
+-  $PODMAN images --all --quiet | wc --lines
++  $PODMAN images --all --format "{{.ID}}" | wc --lines
+ }
+ 
+ 
+-- 
+2.38.1
+
+
+From 2b4106375eb68f5ff56022c9719109fbb2283ad7 Mon Sep 17 00:00:00 2001
+From: Debarshi Ray <rishi@fedoraproject.org>
+Date: Fri, 9 Dec 2022 09:42:32 +0100
+Subject: [PATCH 18/27] test/system: Keep empty lines to prevent missing and
+ spurious newlines
+
+https://github.com/containers/toolbox/pull/1195
+(cherry picked from commit 26ed682cd1f807c5cf2f1300fdb682dc451a4f3a)
+---
+ test/system/107-rmi.bats | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/test/system/107-rmi.bats b/test/system/107-rmi.bats
+index 6518c2798844..404c55a2c3f4 100644
+--- a/test/system/107-rmi.bats
++++ b/test/system/107-rmi.bats
+@@ -20,7 +20,7 @@ teardown() {
+ 
+   pull_default_image
+ 
+-  run $TOOLBOX rmi --all
++  run --keep-empty-lines $TOOLBOX rmi --all
+ 
+   assert_success
+   assert_output ""
+@@ -38,7 +38,7 @@ teardown() {
+   create_container foo
+   start_container foo
+ 
+-  run $TOOLBOX rmi --all
++  run --keep-empty-lines $TOOLBOX rmi --all
+ 
+   assert_failure
+   assert_output --regexp "Error: image .* has dependent children"
+@@ -55,7 +55,7 @@ teardown() {
+   create_container foo
+   start_container foo
+ 
+-  run $TOOLBOX rmi --all --force
++  run --keep-empty-lines $TOOLBOX rmi --all --force
+ 
+   assert_success
+   assert_output ""
+-- 
+2.38.1
+
+
+From f5f0445d2dc4d1129a00458c44d52e6f0be3b5c4 Mon Sep 17 00:00:00 2001
+From: Debarshi Ray <rishi@fedoraproject.org>
+Date: Fri, 9 Dec 2022 10:04:48 +0100
+Subject: [PATCH 19/27] test/system: Ensure that error messages go to the
+ standard error stream
+
+Currently, there's no way to get assert_line to use the stderr_lines
+array [1].  This is worked around by assigning stderr_lines to the
+'lines' array.
+
+[1] https://github.com/bats-core/bats-assert/issues/42
+
+https://github.com/containers/toolbox/pull/1195
+(cherry picked from commit 210985ecd141f768e549970ed74880bf10f058a3)
+---
+ test/system/107-rmi.bats | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/test/system/107-rmi.bats b/test/system/107-rmi.bats
+index 404c55a2c3f4..63eafbbf0a9f 100644
+--- a/test/system/107-rmi.bats
++++ b/test/system/107-rmi.bats
+@@ -38,10 +38,11 @@ teardown() {
+   create_container foo
+   start_container foo
+ 
+-  run --keep-empty-lines $TOOLBOX rmi --all
++  run --keep-empty-lines --separate-stderr $TOOLBOX rmi --all
+ 
+   assert_failure
+-  assert_output --regexp "Error: image .* has dependent children"
++  lines=("${stderr_lines[@]}")
++  assert_line --index 0 --regexp "Error: image .* has dependent children"
+ 
+   new_num_of_images=$(list_images)
+ 
+-- 
+2.38.1
+
+
+From ce527b3593e678e85b48b15449a2062a5f16ec55 Mon Sep 17 00:00:00 2001
+From: Debarshi Ray <rishi@fedoraproject.org>
+Date: Fri, 9 Dec 2022 10:21:55 +0100
+Subject: [PATCH 20/27] test/system: Test 'rmi --all' without any images
+
+https://github.com/containers/toolbox/pull/1195
+(cherry picked from commit 8a37c0878087b0d7e1f4efac6d4525d2e9ec4d07)
+---
+ test/system/107-rmi.bats | 20 ++++++++++++++++++++
+ 1 file changed, 20 insertions(+)
+
+diff --git a/test/system/107-rmi.bats b/test/system/107-rmi.bats
+index 63eafbbf0a9f..dfdefb0e29ee 100644
+--- a/test/system/107-rmi.bats
++++ b/test/system/107-rmi.bats
+@@ -14,6 +14,26 @@ teardown() {
+ }
+ 
+ 
++@test "rmi: '--all' without any images" {
++  local num_of_images
++  num_of_images="$(list_images)"
++  assert_equal "$num_of_images" 0
++
++  run --keep-empty-lines --separate-stderr "$TOOLBOX" rmi --all
++
++  assert_success
++  assert_output ""
++  output="$stderr"
++  assert_output ""
++  if check_bats_version 1.7.0; then
++    assert [ ${#lines[@]} -eq 0 ]
++    assert [ ${#stderr_lines[@]} -eq 0 ]
++  fi
++
++  num_of_images="$(list_images)"
++  assert_equal "$num_of_images" 0
++}
++
+ @test "rmi: Remove all images with the default image present" {
+   num_of_images=$(list_images)
+   assert_equal "$num_of_images" 0
+-- 
+2.38.1
+
+
+From e81fcd7311bd602765fcfcc554597f4646124339 Mon Sep 17 00:00:00 2001
+From: Debarshi Ray <rishi@fedoraproject.org>
+Date: Fri, 9 Dec 2022 10:58:18 +0100
+Subject: [PATCH 21/27] test/system: Test 'rmi --all' with an image without a
+ name
+
+https://github.com/containers/toolbox/pull/1195
+(cherry picked from commit e25ab310fab4257dee4db663eef86ac95a3a3ace)
+---
+ test/system/107-rmi.bats | 25 +++++++++++++++++++++++++
+ 1 file changed, 25 insertions(+)
+
+diff --git a/test/system/107-rmi.bats b/test/system/107-rmi.bats
+index dfdefb0e29ee..10d88b970949 100644
+--- a/test/system/107-rmi.bats
++++ b/test/system/107-rmi.bats
+@@ -50,6 +50,31 @@ teardown() {
+   assert_equal "$new_num_of_images" "$num_of_images"
+ }
+ 
++@test "rmi: '--all' with an image without a name" {
++  local num_of_images
++  num_of_images="$(list_images)"
++  assert_equal "$num_of_images" 0
++
++  build_image_without_name
++
++  num_of_images="$(list_images)"
++  assert_equal "$num_of_images" 1
++
++  run --keep-empty-lines --separate-stderr "$TOOLBOX" rmi --all
++
++  assert_success
++  assert_output ""
++  output="$stderr"
++  assert_output ""
++  if check_bats_version 1.7.0; then
++    assert [ ${#lines[@]} -eq 0 ]
++    assert [ ${#stderr_lines[@]} -eq 0 ]
++  fi
++
++  num_of_images="$(list_images)"
++  assert_equal "$num_of_images" 0
++}
++
+ @test "rmi: Try to remove all images with a container present and running" {
+   skip "Bug: Fail in 'toolbox rmi' does not return non-zero value"
+   num_of_images=$(list_images)
+-- 
+2.38.1
+
+
+From d064b51da91a6179e3926c72085e2e2f2e80c47d Mon Sep 17 00:00:00 2001
+From: Debarshi Ray <rishi@fedoraproject.org>
+Date: Fri, 9 Dec 2022 11:02:28 +0100
+Subject: [PATCH 22/27] test/system: Test 'rmi' with an image without a name
+
+https://github.com/containers/toolbox/pull/1195
+(cherry picked from commit a0d4c957b34ef6b5569123522a4bd693a6ddee44)
+---
+ test/system/102-list.bats     |  4 ++--
+ test/system/107-rmi.bats      | 27 ++++++++++++++++++++++++++-
+ test/system/libs/helpers.bash |  4 ++++
+ 3 files changed, 32 insertions(+), 3 deletions(-)
+
+diff --git a/test/system/102-list.bats b/test/system/102-list.bats
+index 9ed6ed3cf847..a109e0fbf87d 100644
+--- a/test/system/102-list.bats
++++ b/test/system/102-list.bats
+@@ -49,7 +49,7 @@ teardown() {
+ }
+ 
+ @test "list: List an image without a name" {
+-  build_image_without_name
++  build_image_without_name >/dev/null
+ 
+   run --keep-empty-lines --separate-stderr $TOOLBOX list
+ 
+@@ -115,7 +115,7 @@ teardown() {
+ 
+   pull_default_image
+   pull_distro_image fedora 34
+-  build_image_without_name
++  build_image_without_name >/dev/null
+ 
+   run --keep-empty-lines --separate-stderr "$TOOLBOX" list --images
+ 
+diff --git a/test/system/107-rmi.bats b/test/system/107-rmi.bats
+index 10d88b970949..00ff09245c4c 100644
+--- a/test/system/107-rmi.bats
++++ b/test/system/107-rmi.bats
+@@ -55,7 +55,7 @@ teardown() {
+   num_of_images="$(list_images)"
+   assert_equal "$num_of_images" 0
+ 
+-  build_image_without_name
++  build_image_without_name >/dev/null
+ 
+   num_of_images="$(list_images)"
+   assert_equal "$num_of_images" 1
+@@ -75,6 +75,31 @@ teardown() {
+   assert_equal "$num_of_images" 0
+ }
+ 
++@test "rmi: An image without a name" {
++  local num_of_images
++  num_of_images="$(list_images)"
++  assert_equal "$num_of_images" 0
++
++  image="$(build_image_without_name)"
++
++  num_of_images="$(list_images)"
++  assert_equal "$num_of_images" 1
++
++  run --keep-empty-lines --separate-stderr "$TOOLBOX" rmi "$image"
++
++  assert_success
++  assert_output ""
++  output="$stderr"
++  assert_output ""
++  if check_bats_version 1.7.0; then
++    assert [ ${#lines[@]} -eq 0 ]
++    assert [ ${#stderr_lines[@]} -eq 0 ]
++  fi
++
++  num_of_images="$(list_images)"
++  assert_equal "$num_of_images" 0
++}
++
+ @test "rmi: Try to remove all images with a container present and running" {
+   skip "Bug: Fail in 'toolbox rmi' does not return non-zero value"
+   num_of_images=$(list_images)
+diff --git a/test/system/libs/helpers.bash b/test/system/libs/helpers.bash
+index a4e02c1dd0a3..36a927cf063f 100644
+--- a/test/system/libs/helpers.bash
++++ b/test/system/libs/helpers.bash
+@@ -129,8 +129,12 @@ function build_image_without_name() {
+   assert_line --index 1 --partial "LABEL com.github.containers.toolbox=\"true\""
+   assert_line --index 2 --partial "COMMIT"
+   assert_line --index 3 --regexp "^--> [a-z0-9]*$"
++  last=$((${#lines[@]}-1))
++  assert_line --index "$last" --regexp "^[a-f0-9]{64}$"
+ 
+   rm -f "$BATS_TMPDIR"/Containerfile
++
++  echo "${lines[$last]}"
+ }
+ 
+ 
+-- 
+2.38.1
+
+
+From dc3a6b6872ec034f5d52f5d484fd0adbedb1a1b0 Mon Sep 17 00:00:00 2001
+From: Martin Krajnak <mkrajnak@redhat.com>
+Date: Fri, 9 Dec 2022 13:03:52 +0100
+Subject: [PATCH 23/27] test/system: Add a helper to pull the default image and
+ copy it
+
+This will be used in subsequent commits to test the handling of such
+copied images in 'toolbox list' and 'toolbox rmi'.
+
+https://github.com/containers/toolbox/issues/1043
+(cherry picked from commit d5daa7167e89cc98eafe22e94dde5bdcd58de013)
+---
+ test/system/libs/helpers.bash | 23 +++++++++++++++++++++++
+ 1 file changed, 23 insertions(+)
+
+diff --git a/test/system/libs/helpers.bash b/test/system/libs/helpers.bash
+index 36a927cf063f..548c4c0e745f 100644
+--- a/test/system/libs/helpers.bash
++++ b/test/system/libs/helpers.bash
+@@ -222,6 +222,29 @@ function pull_default_image() {
+ }
+ 
+ 
++function pull_default_image_and_copy() {
++  pull_default_image
++
++  local distro
++  local version
++  local image
++
++  distro="$(get_system_id)"
++  version="$(get_system_version)"
++  image="${IMAGES[$distro]}:$version"
++
++  # https://github.com/containers/skopeo/issues/547 for the options for containers-storage
++  run "$SKOPEO" copy \
++      "containers-storage:[overlay@$ROOTLESS_PODMAN_STORE_DIR+$ROOTLESS_PODMAN_STORE_DIR]$image" \
++      "containers-storage:[overlay@$ROOTLESS_PODMAN_STORE_DIR+$ROOTLESS_PODMAN_STORE_DIR]$image-copy"
++
++  if [ "$status" -ne 0 ]; then
++    echo "Failed to copy image $image to $image-copy"
++    assert_success
++  fi
++}
++
++
+ # Creates a container with specific name, distro and version
+ #
+ # Pulling of an image is taken care of by the function
+-- 
+2.38.1
+
+
+From a45901f17db0a5cb2dab8fe62a4d74beb7153c41 Mon Sep 17 00:00:00 2001
+From: Debarshi Ray <rishi@fedoraproject.org>
+Date: Fri, 9 Dec 2022 12:58:58 +0100
+Subject: [PATCH 24/27] test/system: Test 'rmi' with an image and its copy
+
+https://github.com/containers/toolbox/issues/1043
+(cherry picked from commit bbdf4ddb63fbabd460107ed219386c5df965f0c4)
+---
+ test/system/107-rmi.bats | 134 +++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 134 insertions(+)
+
+diff --git a/test/system/107-rmi.bats b/test/system/107-rmi.bats
+index 00ff09245c4c..f3c5ef1d8258 100644
+--- a/test/system/107-rmi.bats
++++ b/test/system/107-rmi.bats
+@@ -100,6 +100,140 @@ teardown() {
+   assert_equal "$num_of_images" 0
+ }
+ 
++@test "rmi: An image and its copy by name, separately" {
++  local num_of_images
++  num_of_images="$(list_images)"
++  assert_equal "$num_of_images" 0
++
++  local default_image
++  default_image="$(get_default_image)"
++
++  pull_default_image_and_copy
++
++  num_of_images="$(list_images)"
++  assert_equal "$num_of_images" 2
++
++  run --keep-empty-lines --separate-stderr "$TOOLBOX" rmi "$default_image"
++
++  assert_success
++  assert_output ""
++  output="$stderr"
++  assert_output ""
++  if check_bats_version 1.7.0; then
++    assert [ ${#lines[@]} -eq 0 ]
++    assert [ ${#stderr_lines[@]} -eq 0 ]
++  fi
++
++  run --keep-empty-lines --separate-stderr "$TOOLBOX" rmi "$default_image-copy"
++
++  assert_success
++  assert_output ""
++  output="$stderr"
++  assert_output ""
++  if check_bats_version 1.7.0; then
++    assert [ ${#lines[@]} -eq 0 ]
++    assert [ ${#stderr_lines[@]} -eq 0 ]
++  fi
++
++  num_of_images="$(list_images)"
++  assert_equal "$num_of_images" 0
++}
++
++@test "rmi: An image and its copy by name, separately (reverse order)" {
++  local num_of_images
++  num_of_images="$(list_images)"
++  assert_equal "$num_of_images" 0
++
++  local default_image
++  default_image="$(get_default_image)"
++
++  pull_default_image_and_copy
++
++  num_of_images="$(list_images)"
++  assert_equal "$num_of_images" 2
++
++  run --keep-empty-lines --separate-stderr "$TOOLBOX" rmi "$default_image-copy"
++
++  assert_success
++  assert_output ""
++  output="$stderr"
++  assert_output ""
++  if check_bats_version 1.7.0; then
++    assert [ ${#lines[@]} -eq 0 ]
++    assert [ ${#stderr_lines[@]} -eq 0 ]
++  fi
++
++  run --keep-empty-lines --separate-stderr "$TOOLBOX" rmi "$default_image"
++
++  assert_success
++  assert_output ""
++  output="$stderr"
++  assert_output ""
++  if check_bats_version 1.7.0; then
++    assert [ ${#lines[@]} -eq 0 ]
++    assert [ ${#stderr_lines[@]} -eq 0 ]
++  fi
++
++  num_of_images="$(list_images)"
++  assert_equal "$num_of_images" 0
++}
++
++@test "rmi: An image and its copy by name, together" {
++  local num_of_images
++  num_of_images="$(list_images)"
++  assert_equal "$num_of_images" 0
++
++  local default_image
++  default_image="$(get_default_image)"
++
++  pull_default_image_and_copy
++
++  num_of_images="$(list_images)"
++  assert_equal "$num_of_images" 2
++
++  run --keep-empty-lines --separate-stderr "$TOOLBOX" rmi "$default_image" "$default_image-copy"
++
++  assert_success
++  assert_output ""
++  output="$stderr"
++  assert_output ""
++  if check_bats_version 1.7.0; then
++    assert [ ${#lines[@]} -eq 0 ]
++    assert [ ${#stderr_lines[@]} -eq 0 ]
++  fi
++
++  num_of_images="$(list_images)"
++  assert_equal "$num_of_images" 0
++}
++
++@test "rmi: An image and its copy by name, together (reverse order)" {
++  local num_of_images
++  num_of_images="$(list_images)"
++  assert_equal "$num_of_images" 0
++
++  local default_image
++  default_image="$(get_default_image)"
++
++  pull_default_image_and_copy
++
++  num_of_images="$(list_images)"
++  assert_equal "$num_of_images" 2
++
++  run --keep-empty-lines --separate-stderr "$TOOLBOX" rmi "$default_image-copy" "$default_image"
++
++  assert_success
++  assert_output ""
++  output="$stderr"
++  assert_output ""
++  if check_bats_version 1.7.0; then
++    assert [ ${#lines[@]} -eq 0 ]
++    assert [ ${#stderr_lines[@]} -eq 0 ]
++  fi
++
++  num_of_images="$(list_images)"
++  assert_equal "$num_of_images" 0
++}
++
+ @test "rmi: Try to remove all images with a container present and running" {
+   skip "Bug: Fail in 'toolbox rmi' does not return non-zero value"
+   num_of_images=$(list_images)
+-- 
+2.38.1
+
+
+From fcc8267e361b0a288cf77a43d0382121513a9fd9 Mon Sep 17 00:00:00 2001
+From: Debarshi Ray <rishi@fedoraproject.org>
+Date: Mon, 12 Dec 2022 20:58:25 +0100
+Subject: [PATCH 25/27] test/system: Test 'rmi' with an image
+
+https://github.com/containers/toolbox/pull/1195
+(cherry picked from commit 51eccd3da52b6bdd0326329048ece85d41b4c064)
+---
+ test/system/107-rmi.bats | 28 ++++++++++++++++++++++++++++
+ 1 file changed, 28 insertions(+)
+
+diff --git a/test/system/107-rmi.bats b/test/system/107-rmi.bats
+index f3c5ef1d8258..5dc7be7a6add 100644
+--- a/test/system/107-rmi.bats
++++ b/test/system/107-rmi.bats
+@@ -50,6 +50,34 @@ teardown() {
+   assert_equal "$new_num_of_images" "$num_of_images"
+ }
+ 
++@test "rmi: An image by name" {
++  local num_of_images
++  num_of_images="$(list_images)"
++  assert_equal "$num_of_images" 0
++
++  local default_image
++  default_image="$(get_default_image)"
++
++  pull_default_image
++
++  num_of_images="$(list_images)"
++  assert_equal "$num_of_images" 1
++
++  run --keep-empty-lines --separate-stderr "$TOOLBOX" rmi "$default_image"
++
++  assert_success
++  assert_output ""
++  output="$stderr"
++  assert_output ""
++  if check_bats_version 1.7.0; then
++    assert [ ${#lines[@]} -eq 0 ]
++    assert [ ${#stderr_lines[@]} -eq 0 ]
++  fi
++
++  num_of_images="$(list_images)"
++  assert_equal "$num_of_images" 0
++}
++
+ @test "rmi: '--all' with an image without a name" {
+   local num_of_images
+   num_of_images="$(list_images)"
+-- 
+2.38.1
+
+
+From 73472311a77bfec06a52783056097dbcafc7a8f5 Mon Sep 17 00:00:00 2001
+From: Debarshi Ray <rishi@fedoraproject.org>
+Date: Tue, 6 Dec 2022 18:15:15 +0100
+Subject: [PATCH 26/27] Unbreak sorting and clearly identify copied images in
+ 'list'
+
+Currently, if an image was copied with:
+  $ skopeo copy \
+      containers-storage:registry.fedoraproject.org/fedora-toolbox:36 \
+      containers-storage:localhost/fedora-toolbox:36
+
+... or:
+  $ podman tag \
+      registry.fedoraproject.org/fedora-toolbox:36 \
+      localhost/fedora-toolbox:36
+
+... then it would show up twice in 'list' with the same name, and in the
+wrong order.
+
+Either as:
+  $ toolbox list --images
+  IMAGE ID      IMAGE NAME                                      CREATED
+  2110dbbc33d2  localhost/fedora-toolbox:36                     1 day...
+  e085805ade4a  registry.access.redhat.com/ubi8/toolbox:latest  1 day...
+  2110dbbc33d2  localhost/fedora-toolbox:36                     1 day...
+  70cbe2ce60ca  registry.fedoraproject.org/fedora-toolbox:34    1 day...
+
+... or as:
+  $ toolbox list --images
+  IMAGE ID      IMAGE NAME                                      CREATED
+  2110dbbc33d2  registry.fedoraproject.org/fedora-toolbox:36    1 day...
+  e085805ade4a  registry.access.redhat.com/ubi8/toolbox:latest  1 day...
+  2110dbbc33d2  registry.fedoraproject.org/fedora-toolbox:36    1 day...
+  70cbe2ce60ca  registry.fedoraproject.org/fedora-toolbox:34    1 day...
+
+The correct output should be similar to 'podman images', and be sorted
+in ascending order of the names:
+  $ toolbox list --images
+  IMAGE ID      IMAGE NAME                                      CREATED
+  2110dbbc33d2  localhost/fedora-toolbox:36                     1 day...
+  e085805ade4a  registry.access.redhat.com/ubi8/toolbox:latest  1 day...
+  70cbe2ce60ca  registry.fedoraproject.org/fedora-toolbox:34    1 day...
+  2110dbbc33d2  registry.fedoraproject.org/fedora-toolbox:36    1 day...
+
+The problem is that, in these situations, 'podman images --format json'
+returns separate identical JSON collections for each copy of the image,
+and all of those copies have multiple names:
+  [
+    {
+      "Id": "2110dbbc33d2",
+      ...
+      "Names": [
+        "localhost/fedora-toolbox:36",
+        "registry.fedoraproject.org/fedora-toolbox:36"
+      ],
+      ...
+    },
+    {
+      "Id": "e085805ade4a",
+      ...
+      "Names": [
+        "registry.access.redhat.com/ubi8/toolbox:latest"
+      ],
+      ...
+    },
+    {
+      "Id": "2110dbbc33d2",
+      ...
+      "Names": [
+        "localhost/fedora-toolbox:36",
+        "registry.fedoraproject.org/fedora-toolbox:36"
+      ],
+      ...
+    }
+    {
+      "Id": "70cbe2ce60ca",
+      ...
+      "Names": [
+        "registry.fedoraproject.org/fedora-toolbox:34"
+      ],
+      ...
+    },
+  ]
+
+The image objects need to be flattened to have only one unique name per
+copy, but with the same ID, and then sorted to ensure the right order.
+
+Note that the ordering was already broken since commit 2369da5d31830e5c,
+which started using 'podman images --sort repository'.  Podman can sort
+by either the image's repository or tag, but not by the unified name,
+which is what Toolbx needs.  Therefore, even without copied images,
+Toolbx really does need to sort the images itself.
+
+Prior to commit 2369da5d31830e5c, the ordering was correct, but copied
+images would only show up once.
+
+Fallout from 2369da5d31830e5cd3e1a13857a686365875ae61
+
+This reverts parts of commit 67e210378e7b43cc0847cd171209861862f225b0.
+
+https://github.com/containers/toolbox/issues/1043
+(backported from commit 6aab0a61752dc9a3f0b472b4db5d72c1678ee702)
+---
+ src/cmd/list.go           | 31 +++++++++++++++++-------
+ src/cmd/rmi.go            |  2 +-
+ src/pkg/podman/podman.go  | 50 +++++++++++++++++++++++++++++++++++++++
+ test/system/102-list.bats | 12 +++++-----
+ 4 files changed, 80 insertions(+), 15 deletions(-)
+
+diff --git a/src/cmd/list.go b/src/cmd/list.go
+index 9493a54593af..134ec7fc472f 100644
+--- a/src/cmd/list.go
++++ b/src/cmd/list.go
+@@ -21,6 +21,7 @@ import (
+ 	"errors"
+ 	"fmt"
+ 	"os"
++	"sort"
+ 	"text/tabwriter"
+ 
+ 	"github.com/containers/toolbox/pkg/podman"
+@@ -104,7 +105,7 @@ func list(cmd *cobra.Command, args []string) error {
+ 	var err error
+ 
+ 	if lsImages {
+-		images, err = getImages()
++		images, err = getImages(false)
+ 		if err != nil {
+ 			return err
+ 		}
+@@ -179,26 +180,41 @@ func listHelp(cmd *cobra.Command, args []string) {
+ 	}
+ }
+ 
+-func getImages() ([]podman.Image, error) {
++func getImages(fillNameWithID bool) ([]podman.Image, error) {
+ 	logrus.Debug("Fetching all images")
+-	args := []string{"--sort", "repository"}
++	var args []string
+ 	images, err := podman.GetImages(args...)
+ 	if err != nil {
+ 		logrus.Debugf("Fetching all images failed: %s", err)
+ 		return nil, errors.New("failed to get images")
+ 	}
+ 
++	processed := make(map[string]struct{})
+ 	var toolboxImages []podman.Image
+ 
+ 	for _, image := range images {
++		if _, ok := processed[image.ID]; ok {
++			continue
++		}
++
++		processed[image.ID] = struct{}{}
++		var isToolboxImage bool
++
+ 		for label := range toolboxLabels {
+ 			if _, ok := image.Labels[label]; ok {
+-				toolboxImages = append(toolboxImages, image)
++				isToolboxImage = true
+ 				break
+ 			}
+ 		}
++
++		if isToolboxImage {
++			flattenedImages := image.FlattenNames(fillNameWithID)
++			toolboxImages = append(toolboxImages, flattenedImages...)
++		}
++
+ 	}
+ 
++	sort.Sort(podman.ImageSlice(toolboxImages))
+ 	return toolboxImages, nil
+ }
+ 
+@@ -208,14 +224,13 @@ func listOutput(images []podman.Image, containers []toolboxContainer) {
+ 		fmt.Fprintf(writer, "%s\t%s\t%s\n", "IMAGE ID", "IMAGE NAME", "CREATED")
+ 
+ 		for _, image := range images {
+-			imageName := "<none>"
+-			if len(image.Names) != 0 {
+-				imageName = image.Names[0]
++			if len(image.Names) != 1 {
++				panic("cannot list unflattened Image")
+ 			}
+ 
+ 			fmt.Fprintf(writer, "%s\t%s\t%s\n",
+ 				utils.ShortID(image.ID),
+-				imageName,
++				image.Names[0],
+ 				image.Created)
+ 		}
+ 
+diff --git a/src/cmd/rmi.go b/src/cmd/rmi.go
+index d47a75e2f5c4..4b2e02811281 100644
+--- a/src/cmd/rmi.go
++++ b/src/cmd/rmi.go
+@@ -69,7 +69,7 @@ func rmi(cmd *cobra.Command, args []string) error {
+ 	}
+ 
+ 	if rmiFlags.deleteAll {
+-		toolboxImages, err := getImages()
++		toolboxImages, err := getImages(false)
+ 		if err != nil {
+ 			return err
+ 		}
+diff --git a/src/pkg/podman/podman.go b/src/pkg/podman/podman.go
+index 623116707f36..153c0b5a0375 100644
+--- a/src/pkg/podman/podman.go
++++ b/src/pkg/podman/podman.go
+@@ -35,6 +35,8 @@ type Image struct {
+ 	Labels  map[string]string
+ }
+ 
++type ImageSlice []Image
++
+ var (
+ 	podmanVersion string
+ )
+@@ -43,6 +45,34 @@ var (
+ 	LogLevel = logrus.ErrorLevel
+ )
+ 
++func (image *Image) FlattenNames(fillNameWithID bool) []Image {
++	var ret []Image
++
++	if len(image.Names) == 0 {
++		flattenedImage := *image
++
++		if fillNameWithID {
++			shortID := utils.ShortID(image.ID)
++			flattenedImage.Names = []string{shortID}
++		} else {
++			flattenedImage.Names = []string{"<none>"}
++		}
++
++		ret = []Image{flattenedImage}
++		return ret
++	}
++
++	ret = make([]Image, 0, len(image.Names))
++
++	for _, name := range image.Names {
++		flattenedImage := *image
++		flattenedImage.Names = []string{name}
++		ret = append(ret, flattenedImage)
++	}
++
++	return ret
++}
++
+ func (image *Image) UnmarshalJSON(data []byte) error {
+ 	var raw struct {
+ 		ID      string
+@@ -72,6 +102,26 @@ func (image *Image) UnmarshalJSON(data []byte) error {
+ 	return nil
+ }
+ 
++func (images ImageSlice) Len() int {
++	return len(images)
++}
++
++func (images ImageSlice) Less(i, j int) bool {
++	if len(images[i].Names) != 1 {
++		panic("cannot sort unflattened ImageSlice")
++	}
++
++	if len(images[j].Names) != 1 {
++		panic("cannot sort unflattened ImageSlice")
++	}
++
++	return images[i].Names[0] < images[j].Names[0]
++}
++
++func (images ImageSlice) Swap(i, j int) {
++	images[i], images[j] = images[j], images[i]
++}
++
+ // CheckVersion compares provided version with the version of Podman.
+ //
+ // Takes in one string parameter that should be in the format that is used for versioning (eg. 1.0.0, 2.5.1-dev).
+diff --git a/test/system/102-list.bats b/test/system/102-list.bats
+index a109e0fbf87d..c706a5e87183 100644
+--- a/test/system/102-list.bats
++++ b/test/system/102-list.bats
+@@ -75,8 +75,8 @@ teardown() {
+   run --keep-empty-lines --separate-stderr $TOOLBOX list --images
+ 
+   assert_success
+-  assert_line --index 1 --partial "$(get_system_id)-toolbox:$(get_system_version)"
+-  assert_line --index 2 --partial "fedora-toolbox:32"
++  assert_line --index 1 --partial "fedora-toolbox:32"
++  assert_line --index 2 --partial "$(get_system_id)-toolbox:$(get_system_version)"
+   assert [ ${#lines[@]} -eq 4 ]
+   if check_bats_version 1.7.0; then
+     assert [ ${#stderr_lines[@]} -eq 0 ]
+@@ -98,8 +98,8 @@ teardown() {
+   run --keep-empty-lines --separate-stderr $TOOLBOX list
+ 
+   assert_success
+-  assert_line --index 1 --partial "$(get_system_id)-toolbox:$(get_system_version)"
+-  assert_line --index 2 --partial "fedora-toolbox:32"
++  assert_line --index 1 --partial "fedora-toolbox:32"
++  assert_line --index 2 --partial "$(get_system_id)-toolbox:$(get_system_version)"
+   assert_line --index 5 --partial "$(get_system_id)-toolbox-$(get_system_version)"
+   assert_line --index 6 --partial "non-default-one"
+   assert_line --index 7 --partial "non-default-two"
+@@ -121,8 +121,8 @@ teardown() {
+ 
+   assert_success
+   assert_line --index 1 --partial "<none>"
+-  assert_line --index 2 --partial "$default_image"
+-  assert_line --index 3 --partial "fedora-toolbox:34"
++  assert_line --index 2 --partial "fedora-toolbox:34"
++  assert_line --index 3 --partial "$default_image"
+   assert [ ${#lines[@]} -eq 5 ]
+   if check_bats_version 1.7.0; then
+     assert [ ${#stderr_lines[@]} -eq 0 ]
+-- 
+2.38.1
+
+
+From 7fa8b2454b41c05dad8703c5c590c5cc9518dd72 Mon Sep 17 00:00:00 2001
+From: Martin Krajnak <mkrajnak@redhat.com>
+Date: Wed, 7 Dec 2022 23:12:53 +0100
+Subject: [PATCH 27/27] test/system: Ensure that copied images are clearly
+ identified
+
+Note that 'run --keep-empty-lines' counts the trailing newline on the
+last line as a separate line.
+
+Until Bats 1.7.0, 'run --keep-empty-lines' had a bug where even when a
+command produced no output, it would report a line count of one [1] due
+to a stray line feed character.  This needs to be conditionalized, since
+Fedora 35 has Bats 1.5.0.
+
+[1] https://github.com/bats-core/bats-core/issues/573
+
+https://github.com/containers/toolbox/issues/1043
+(cherry picked from commit 05a062f8c91355b119e8eaa4643d4ba9e25534ef)
+---
+ test/system/102-list.bats | 21 +++++++++++++++++++++
+ 1 file changed, 21 insertions(+)
+
+diff --git a/test/system/102-list.bats b/test/system/102-list.bats
+index c706a5e87183..dd7f1244709a 100644
+--- a/test/system/102-list.bats
++++ b/test/system/102-list.bats
+@@ -61,6 +61,27 @@ teardown() {
+   fi
+ }
+ 
++@test "list: Image and its copy" {
++  local default_image
++  default_image="$(get_default_image)"
++
++  pull_default_image_and_copy
++
++  local num_of_images
++  num_of_images="$(list_images)"
++  assert_equal "$num_of_images" 2
++
++  run --keep-empty-lines --separate-stderr "$TOOLBOX" list
++
++  assert_success
++  assert_line --index 1 --partial "$default_image"
++  assert_line --index 2 --partial "$default_image-copy"
++  assert [ ${#lines[@]} -eq 4 ]
++  if check_bats_version 1.7.0; then
++    assert [ ${#stderr_lines[@]} -eq 0 ]
++  fi
++}
++
+ @test "list: Try to list images and containers (no flag) with 3 containers and 2 images (the list should have 3 images and 2 containers)" {
+   # Pull the two images
+   pull_default_image
+-- 
+2.38.1
+

@@ -1,0 +1,101 @@
+From cc15d0ac76fa77a2fa0f3c73e1a3ed4e7ceb2b29 Mon Sep 17 00:00:00 2001
+From: Debarshi Ray <rishi@fedoraproject.org>
+Date: Wed, 18 Aug 2021 17:55:21 +0200
+Subject: [PATCH 1/2] cmd/run: Make sosreport work by setting the HOST
+ environment variable
+
+https://bugzilla.redhat.com/show_bug.cgi?id=1940037
+---
+ src/cmd/run.go | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/src/cmd/run.go b/src/cmd/run.go
+index 5954eac55fad..ca363815d4c9 100644
+--- a/src/cmd/run.go
++++ b/src/cmd/run.go
+@@ -441,6 +441,7 @@ func constructExecArgs(container string,
+ 	execArgs = append(execArgs, detachKeys...)
+ 
+ 	execArgs = append(execArgs, []string{
++		"--env", "HOST=/run/host",
+ 		"--interactive",
+ 		"--tty",
+ 		"--user", currentUser.Username,
+-- 
+2.39.1
+
+
+From a47cd46e0ca32b8af0ea8181c856ce2a8d8307fd Mon Sep 17 00:00:00 2001
+From: Debarshi Ray <rishi@fedoraproject.org>
+Date: Fri, 10 Dec 2021 13:42:15 +0100
+Subject: [PATCH 2/2] test/system: Update to test the migration path for
+ coreos/toolbox users
+
+This reverts the changes to the tests made in commit
+411147988b730dabf8b9e761a5426e12d648f008 by restoring commit
+ca899c8a561f357ae32c6ba6813520fd8b682abb and the parts of commit
+3aeb7cf288319e35eb9c5e26ea18d97452462c1e that were removed.
+---
+ test/system/002-help.bats | 11 -----------
+ test/system/100-root.bats | 27 +++++++++++++++++++++++++++
+ 2 files changed, 27 insertions(+), 11 deletions(-)
+ create mode 100644 test/system/100-root.bats
+
+diff --git a/test/system/002-help.bats b/test/system/002-help.bats
+index 689f95e472a1..525d44431ee5 100644
+--- a/test/system/002-help.bats
++++ b/test/system/002-help.bats
+@@ -8,17 +8,6 @@ setup() {
+   _setup_environment
+ }
+ 
+-@test "help: Try to run toolbox with no command" {
+-  run $TOOLBOX
+-
+-  assert_failure
+-  assert_line --index 0 "Error: missing command"
+-  assert_line --index 1 "create    Create a new toolbox container"
+-  assert_line --index 2 "enter     Enter an existing toolbox container"
+-  assert_line --index 3 "list      List all existing toolbox containers and images"
+-  assert_line --index 4 "Run 'toolbox --help' for usage."
+-}
+-
+ @test "help: Run command 'help'" {
+   if ! command -v man 2>/dev/null; then
+     skip "Test works only if man is in PATH"
+diff --git a/test/system/100-root.bats b/test/system/100-root.bats
+new file mode 100644
+index 000000000000..32d87904213e
+--- /dev/null
++++ b/test/system/100-root.bats
+@@ -0,0 +1,27 @@
++#!/usr/bin/env bats
++
++load 'libs/bats-support/load'
++load 'libs/bats-assert/load'
++load 'libs/helpers'
++
++setup() {
++  _setup_environment
++  cleanup_containers
++}
++
++teardown() {
++  cleanup_containers
++}
++
++@test "root: Try to enter the default container with no containers created" {
++  run $TOOLBOX <<< "n"
++
++  assert_success
++  assert_line --index 0 "No toolbox containers found. Create now? [y/N] A container can be created later with the 'create' command."
++  assert_line --index 1 "Run 'toolbox --help' for usage."
++}
++
++# TODO: Write the test
++@test "root: Enter the default container when 1 non-default container is present" {
++  skip "Testing of entering toolboxes is not implemented"
++}
+-- 
+2.39.1
+

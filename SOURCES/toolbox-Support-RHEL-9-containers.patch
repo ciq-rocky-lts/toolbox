@@ -1,0 +1,211 @@
+From 9bffb4630b2fc026fe32ddcb2674499c863aac32 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Ond=C5=99ej=20M=C3=ADchal?= <harrymichal@seznam.cz>
+Date: Sat, 8 Jan 2022 19:53:53 +0200
+Subject: [PATCH 1/3] pkg/utils: Use new UBI toolbox image
+
+Red Hat has published a new UBI image made specificaly for Toolbx.
+Make use of it from now on.
+
+Fixes: https://github.com/containers/toolbox/issues/961
+
+https://github.com/containers/toolbox/issues/976
+(cherry picked from commit f456c173b6fd69ad390a419d23dafcf3f25b15a8)
+---
+ src/pkg/utils/utils.go        | 2 +-
+ test/system/libs/helpers.bash | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/src/pkg/utils/utils.go b/src/pkg/utils/utils.go
+index ab59afc22283..3119fee74375 100644
+--- a/src/pkg/utils/utils.go
++++ b/src/pkg/utils/utils.go
+@@ -104,7 +104,7 @@ var (
+ 		},
+ 		"rhel": {
+ 			"rhel-toolbox",
+-			"ubi",
++			"toolbox",
+ 			parseReleaseRHEL,
+ 			"registry.access.redhat.com",
+ 			"ubi8",
+diff --git a/test/system/libs/helpers.bash b/test/system/libs/helpers.bash
+index 548c4c0e745f..e29273a644dd 100644
+--- a/test/system/libs/helpers.bash
++++ b/test/system/libs/helpers.bash
+@@ -18,7 +18,7 @@ readonly SKOPEO=$(command -v skopeo)
+ # Images
+ declare -Ag IMAGES=([busybox]="quay.io/toolbox_tests/busybox" \
+                    [fedora]="registry.fedoraproject.org/fedora-toolbox" \
+-                   [rhel]="registry.access.redhat.com/ubi8")
++                   [rhel]="registry.access.redhat.com/ubi8/toolbox")
+ 
+ 
+ function cleanup_all() {
+-- 
+2.39.1
+
+
+From 643384caf11050a1e8d694176a6e09d732461975 Mon Sep 17 00:00:00 2001
+From: Debarshi Ray <rishi@fedoraproject.org>
+Date: Sun, 29 Jan 2023 09:41:16 +0100
+Subject: [PATCH 2/3] pkg/utils: Be more strict about what is acceptable
+
+https://github.com/containers/toolbox/issues/1065
+(cherry picked from commit 262c90e06fdb91e0b693fae33a519eb2756de75b)
+---
+ src/pkg/utils/utils.go | 15 ++++++++++++++-
+ 1 file changed, 14 insertions(+), 1 deletion(-)
+
+diff --git a/src/pkg/utils/utils.go b/src/pkg/utils/utils.go
+index 3119fee74375..b4c012e8fe3a 100644
+--- a/src/pkg/utils/utils.go
++++ b/src/pkg/utils/utils.go
+@@ -1,5 +1,5 @@
+ /*
+- * Copyright © 2019 – 2021 Red Hat Inc.
++ * Copyright © 2019 – 2023 Red Hat Inc.
+  *
+  * Licensed under the Apache License, Version 2.0 (the "License");
+  * you may not use this file except in compliance with the License.
+@@ -278,6 +278,19 @@ func GetEnvOptionsForPreservedVariables() []string {
+ func GetFullyQualifiedImageFromDistros(image, release string) (string, error) {
+ 	logrus.Debugf("Resolving fully qualified name for image %s from known registries", image)
+ 
++	if image == "" {
++		panic("image not specified")
++	}
++
++	if release == "" {
++		panic("release not specified")
++	}
++
++	if tag := ImageReferenceGetTag(image); tag != "" && release != tag {
++		panicMsg := fmt.Sprintf("image %s does not match release %s", image, release)
++		panic(panicMsg)
++	}
++
+ 	if ImageReferenceHasDomain(image) {
+ 		return image, nil
+ 	}
+-- 
+2.39.1
+
+
+From 1ce213fabb3321937421404350e57f376cb9134d Mon Sep 17 00:00:00 2001
+From: Debarshi Ray <rishi@fedoraproject.org>
+Date: Sun, 29 Jan 2023 09:47:13 +0100
+Subject: [PATCH 3/3] pkg/utils: Support RHEL 9 Toolbx containers
+
+The URLs for the RHEL Toolbx images based on the Red Hat Universal Base
+Images (or UBI) are a bit more complicated to construct, in comparison
+to the URLs for Fedora's fedora-toolbox images.  It's not enough to just
+concatenate the registry, the image's basename and the release.  Some
+parts of the URL depend on the release's major number, which requires
+custom code.
+
+So far, the release's major number was hard coded to 8 since only RHEL 8
+Toolbx containers were supported.
+
+To support other RHEL major releases, it's necessary to have custom code
+to construct the URLs for the Toolbx images.
+
+https://github.com/containers/toolbox/issues/1065
+(cherry picked from commit 0a29b374e649437126d8bbe12707fb44d20073d3)
+---
+ src/pkg/utils/utils.go | 47 +++++++++++++++++++++---------------------
+ 1 file changed, 23 insertions(+), 24 deletions(-)
+
+diff --git a/src/pkg/utils/utils.go b/src/pkg/utils/utils.go
+index b4c012e8fe3a..4e4abeca4817 100644
+--- a/src/pkg/utils/utils.go
++++ b/src/pkg/utils/utils.go
+@@ -38,15 +38,14 @@ import (
+ 	"golang.org/x/sys/unix"
+ )
+ 
++type GetFullyQualifiedImageFunc func(string, string) string
+ type ParseReleaseFunc func(string) (string, error)
+ 
+ type Distro struct {
+ 	ContainerNamePrefix    string
+ 	ImageBasename          string
++	GetFullyQualifiedImage GetFullyQualifiedImageFunc
+ 	ParseRelease           ParseReleaseFunc
+-	Registry               string
+-	Repository             string
+-	RepositoryNeedsRelease bool
+ }
+ 
+ const (
+@@ -97,18 +96,14 @@ var (
+ 		"fedora": {
+ 			"fedora-toolbox",
+ 			"fedora-toolbox",
++			getFullyQualifiedImageFedora,
+ 			parseReleaseFedora,
+-			"registry.fedoraproject.org",
+-			"",
+-			false,
+ 		},
+ 		"rhel": {
+ 			"rhel-toolbox",
+ 			"toolbox",
++			getFullyQualifiedImageRHEL,
+ 			parseReleaseRHEL,
+-			"registry.access.redhat.com",
+-			"ubi8",
+-			false,
+ 		},
+ 	}
+ )
+@@ -305,21 +300,8 @@ func GetFullyQualifiedImageFromDistros(image, release string) (string, error) {
+ 			continue
+ 		}
+ 
+-		var repository string
+-
+-		if distroObj.RepositoryNeedsRelease {
+-			repository = fmt.Sprintf(distroObj.Repository, release)
+-		} else {
+-			repository = distroObj.Repository
+-		}
+-
+-		imageFull := distroObj.Registry
+-
+-		if repository != "" {
+-			imageFull = imageFull + "/" + repository
+-		}
+-
+-		imageFull = imageFull + "/" + image
++		getFullyQualifiedImageImpl := distroObj.GetFullyQualifiedImage
++		imageFull := getFullyQualifiedImageImpl(image, release)
+ 
+ 		logrus.Debugf("Resolved image %s to %s", image, imageFull)
+ 
+@@ -329,6 +311,23 @@ func GetFullyQualifiedImageFromDistros(image, release string) (string, error) {
+ 	return "", fmt.Errorf("failed to resolve image %s", image)
+ }
+ 
++func getFullyQualifiedImageFedora(image, release string) string {
++	imageFull := "registry.fedoraproject.org/" + image
++	return imageFull
++}
++
++func getFullyQualifiedImageRHEL(image, release string) string {
++	i := strings.IndexRune(release, '.')
++	if i == -1 {
++		panicMsg := fmt.Sprintf("release %s not in '<major>.<minor>' format", release)
++		panic(panicMsg)
++	}
++
++	releaseMajor := release[:i]
++	imageFull := "registry.access.redhat.com/ubi" + releaseMajor + "/" + image
++	return imageFull
++}
++
+ // GetGroupForSudo returns the name of the sudoers group.
+ //
+ // Some distros call it 'sudo' (eg. Ubuntu) and some call it 'wheel' (eg. Fedora).
+-- 
+2.39.1
+
