@@ -1,4 +1,4 @@
-From 606f135e4900c7d808341515b74811e3a3714cff Mon Sep 17 00:00:00 2001
+From 2ecd1ac4d83844d5b6314762587fc2347adfdd0f Mon Sep 17 00:00:00 2001
 From: Debarshi Ray <rishi@fedoraproject.org>
 Date: Mon, 29 Jun 2020 17:57:47 +0200
 Subject: [PATCH] build: Make the build flags match RHEL's %{gobuildflags}
@@ -51,5 +51,5 @@ index c572d6dfb02b..c492a4e73445 100755
  
  exit "$?"
 -- 
-2.39.2
+2.43.0
 

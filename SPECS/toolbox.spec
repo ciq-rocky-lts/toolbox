@@ -1,13 +1,13 @@
 %global __brp_check_rpaths %{nil}
 
 Name:                 toolbox
-Version:              0.0.99.4
+Version:              0.0.99.5
 
 %global goipath github.com/containers/%{name}
 %gometa
 
-Release:              5%{?dist}.rocky.0.2
-Summary:              Tool for containerized command line environments on Linux
+Release:              2%{?dist}.rocky.0.2
+Summary:              Tool for interactive command line environments on Linux
 
 License:              ASL 2.0
 URL:                  https://containertoolbx.org/
@@ -15,18 +15,13 @@ URL:                  https://containertoolbx.org/
 Source0:              https://github.com/containers/%{name}/releases/download/%{version}/%{name}-%{version}-vendored.tar.xz
 Source1:              %{name}.conf
 
-# Upstream
-Patch0:               toolbox-Don-t-use-podman-1-when-generating-the-comp.patch
-Patch1:               toolbox-Don-t-validate-subordinate-IDs-when-generat.patch
-Patch2:               toolbox-cmd-initContainer-Be-aware-of-security-hardened-moun.patch
-
 # RHEL specific
 Patch100:             toolbox-Make-the-build-flags-match-RHEL-s-gobuild.patch
 Patch101:             toolbox-Make-the-build-flags-match-RHEL-s-gobuild-for-PPC64.patch
 Patch102:             toolbox-Add-migration-paths-for-coreos-toolbox-users.patch
 
 BuildRequires:        gcc
-BuildRequires:        golang >= 1.20.4
+BuildRequires:        golang >= 1.21.7
 BuildRequires:        /usr/bin/go-md2man
 BuildRequires:        meson >= 0.58.0
 BuildRequires:        pkgconfig(bash-completion)
@@ -34,14 +29,23 @@ BuildRequires:        shadow-utils-subid-devel
 BuildRequires:        systemd
 BuildRequires:        systemd-rpm-macros
 
+Recommends:           skopeo
+Recommends:           subscription-manager
+
 Requires:             containers-common
-Requires:             podman >= 1.4.0
+Requires:             podman >= 1.6.4
 
 
 %description
-Toolbox is a tool for Linux operating systems, which allows the use of
-containerized command line environments. It is built on top of Podman and
-other standard container technologies from OCI.
+Toolbx is a tool for Linux, which allows the use of interactive command line
+environments for development and troubleshooting the host operating system,
+without having to install software on the host. It is built on top of Podman
+and other standard container technologies from OCI.
+
+Toolbx environments have seamless access to the user's home directory, the
+Wayland and X11 sockets, networking (including Avahi), removable devices (like
+USB sticks), systemd journal, SSH agent, D-Bus, ulimits, /dev and the udev
+database, etc..
 
 
 %package       tests
@@ -49,9 +53,11 @@ Summary:              Tests for %{name}
 
 Requires:             %{name}%{?_isa} = %{version}-%{release}
 Requires:             coreutils
-Requires:             gawk
 Requires:             grep
+Requires:             httpd-tools
+Requires:             openssl
 Requires:             skopeo
+
 
 %description   tests
 The %{name}-tests package contains system tests for %{name}.
@@ -59,9 +65,6 @@ The %{name}-tests package contains system tests for %{name}.
 
 %prep
 %setup -q
-%patch0 -p1
-%patch1 -p1
-%patch2 -p1
 
 %ifnarch ppc64
 %patch100 -p1
@@ -122,13 +125,34 @@ install -m0644 %{SOURCE1} %{buildroot}%{_sysconfdir}/containers/%{name}.conf
 %{_sysconfdir}/profile.d/%{name}.sh
 %{_tmpfilesdir}/%{name}.conf
 
+
 %files tests
 %{_datadir}/%{name}
 
 
 %changelog
-* Thu Feb 08 2024 Neil Hanlon <neil@resf.org> - 0.0.99.4-5.rocky.0.2
+* Wed Mar 26 2025 Neil Hanlon <neil@resf.org> - 0.0.99.5-2.rocky.0.2
 - Use Rocky Linux Toolbox Image
+
+* Mon Feb 19 2024 Debarshi Ray <rishi@fedoraproject.org> - 0.0.99.5-2
+- Rebuild for CVE-2023-39326
+Resolves:             RHEL-18393
+
+* Mon Jan 15 2024 Debarshi Ray <rishi@fedoraproject.org> - 0.0.99.5-1
+- Update to 0.0.99.5
+Resolves:             RHEL-19773
+
+* Fri Dec 08 2023 Debarshi Ray <rishi@fedoraproject.org> - 0.0.99.4-8
+- Rebuild for CVE-2023-39325 and CVE-2023-44487
+Resolves:             RHEL-12620
+
+* Mon Nov 27 2023 Debarshi Ray <rishi@fedoraproject.org> - 0.0.99.4-7
+- Rebuild for CVE-2023-29406, CVE-2023-39318 and CVE-2023-39319
+Resolves:             RHEL-4231, RHEL-4475, RHEL-4502
+
+* Mon Oct 02 2023 Debarshi Ray <rishi@fedoraproject.org> - 0.0.99.4-6
+- Simplify removing the user's password
+Resolves:             RHEL-2038
 
 * Fri Aug 11 2023 Debarshi Ray <rishi@fedoraproject.org> - 0.0.99.4-5
 - Be aware of security hardened mount points
