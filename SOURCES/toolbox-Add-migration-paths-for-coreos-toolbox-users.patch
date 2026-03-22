@@ -1,4 +1,4 @@
-From 4587b6e9240bf936b760e901435c4cfdd9c582b6 Mon Sep 17 00:00:00 2001
+From 17578dea0f0fb053906d900d1eac0d1b989564f5 Mon Sep 17 00:00:00 2001
 From: Debarshi Ray <rishi@fedoraproject.org>
 Date: Wed, 18 Aug 2021 17:55:21 +0200
 Subject: [PATCH 1/2] cmd/run: Make sosreport work by setting the HOST
@@ -22,10 +22,10 @@ index e2e31d9da4e6..84ad46518bfc 100644
  		"--preserve-fds", preserveFDs,
  	}...)
 -- 
-2.43.0
+2.52.0
 
 
-From 892c33ed75443de90a2caa90959387bbc270c564 Mon Sep 17 00:00:00 2001
+From 7baac5cc2c3096c96ce8231f2f3e182cfb7f2e33 Mon Sep 17 00:00:00 2001
 From: Debarshi Ray <rishi@fedoraproject.org>
 Date: Fri, 10 Dec 2021 13:42:15 +0100
 Subject: [PATCH 2/2] test/system: Update to test the migration path for
@@ -42,11 +42,11 @@ ca899c8a561f357ae32c6ba6813520fd8b682abb and the parts of commit
  create mode 100644 test/system/100-root.bats
 
 diff --git a/test/system/002-help.bats b/test/system/002-help.bats
-index 695c51f92e7e..5fa4c6fe0b4c 100644
+index 38ff397430eb..d04aa690c43a 100644
 --- a/test/system/002-help.bats
 +++ b/test/system/002-help.bats
-@@ -23,20 +23,6 @@ setup() {
-   _setup_environment
+@@ -28,20 +28,6 @@ teardown() {
+   popd || return 1
  }
  
 -@test "help: Smoke test" {
@@ -100,5 +100,5 @@ index 000000000000..32d87904213e
 +  skip "Testing of entering toolboxes is not implemented"
 +}
 -- 
-2.43.0
+2.52.0
 
